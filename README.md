@@ -1,1 +1,12 @@
-#  my-first-project
+# my-first-project
+
+
+
+이름:이태호
+
+학교:구지중학교
+
+잘 하는일:코딩으로 뭐언가를 만들기
+
+
+
