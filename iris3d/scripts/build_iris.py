@@ -584,6 +584,7 @@ nt.links.new(over.outputs["Image"], comp.inputs["Image"])
 # --------------------------------------------------------------------------
 scene.frame_set(1)
 os.makedirs(os.path.dirname(os.path.abspath(args.blend)), exist_ok=True)
+bpy.context.preferences.filepaths.save_version = 0
 bpy.ops.wm.save_as_mainfile(filepath=os.path.abspath(args.blend), compress=True)
 
 arm_data.pose_position = "REST"
