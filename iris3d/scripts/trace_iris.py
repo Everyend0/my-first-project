@@ -277,10 +277,29 @@ def main(src, out_dir):
     print(f"mesh: pts={len(pts)} tris={len(tri)} {chk}")
     assert chk["nonloop_border"] == 0 and chk["overused"] == 0 and chk["euler"] == 1
 
-    # per-vertex height: sample u (smooth, ~linear at the edge) then map
-    uv = bilinear(u, pts)
-    h = capped(np.sqrt(np.clip(2.0 * uv, 0, None)))
+    # per-vertex height.
+    # The black outline is a thin, almost flat rim (depth <= H_RIM) and the
+    # yellow body is inflated from the yellow edge with a finite edge slope.
+    # If the outline band were painted on the steep side of one big inflated
+    # shape, it would look thick on one side and hairline-thin on the other as
+    # soon as the camera tilts; a flat rim keeps the drawn width from every
+    # angle the videos use. The front view (xy) is unchanged either way.
+    H_RIM, C_EDGE = 4.0, 30.0
+    u_y = solve_poisson(poly_mask((H, W), yel_loop))
+    prof = lambda q: np.sqrt(2.0 * q + C_EDGE * C_EDGE) - C_EDGE  # noqa: E731
+    R_y = R_arm - stroke_w                       # yellow half-width of an arm
+    xs = np.linspace(0.0, S1, 4000)
+    # keep the old arm-centre height: capped(R_arm) == H_RIM + capped(k2 * prof(R_y^2/2))
+    k2 = np.interp(capped(R_arm) - H_RIM, capped(xs), xs) / prof(R_y ** 2 / 2)
+    in_y = bilinear((u_y > 0).astype(np.float32), pts) > 0.5
+    in_y[nb:nb + len(yel_loop)] = True           # yellow-loop vertices (loops come first)
+    h_y = H_RIM + capped(k2 * prof(np.clip(bilinear(u_y, pts), 0, None)))
+    dv = np.clip(bilinear(dt, pts) / stroke_w, 0.0, 1.0)
+    h_b = H_RIM * np.sqrt(1.0 - (1.0 - dv) ** 2)  # rounded rim; front/back meet on the outer loop
+    h = np.where(in_y, h_y, h_b)
     h[:nb] = 0.0
+    hmap = H_RIM + capped(k2 * prof(np.clip(u_y, 0, None)))   # for height_debug.png
+    print(f"height: rim {H_RIM}px, edge slope {k2 * R_y / C_EDGE:.2f}, max {h.max():.1f}px")
 
     # per-triangle material by centroid
     cen_t = pts[tri].mean(1)

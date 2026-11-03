@@ -78,10 +78,9 @@ bpy.ops.nla.bake(frame_start=1, frame_end=LOOP + 1, only_selected=False,
                  visual_keying=True, clear_constraints=True, use_current_action=False,
                  bake_types={"POSE"})
 bpy.ops.object.mode_set(mode="OBJECT")
-exp.animation_data.action.name = "IrisBurstLoop"
-for fc in exp.animation_data.action.fcurves:
-    for kp in fc.keyframe_points:
-        kp.interpolation = "LINEAR"
+# the FBX take is named after the scene; Unity's IrisModelPostprocessor
+# renames the clip to "IrisBurstLoop" and makes it loop
+scene.name = "IrisBurstLoop"
 
 # move the mesh onto the export rig
 mod = body.modifiers["Armature"]

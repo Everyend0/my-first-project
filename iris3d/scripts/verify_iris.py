@@ -20,6 +20,7 @@ import sys
 
 import bpy
 import numpy as np
+from mathutils import Vector
 
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 ap = argparse.ArgumentParser()
@@ -58,8 +59,8 @@ base_w = base @ mw[:3, :3].T + mw[:3, 3]
 # ---- face vertices (front faces with black material inside the yellow) ---
 me = body.data
 # face strokes = black-material vertices fully weighted to the face joint
-# (arm_N.3 is the rigid joint that carries the eyes and smile)
-face_bone = "arm_N.3"
+# (the rigid joint that carries the eyes and smile; stored by build_iris.py)
+face_bone = rig["face_bone"]
 gi = body.vertex_groups[face_bone].index
 face_v = [v.index for v in me.vertices
           if any(g.group == gi and g.weight > 0.9999 for g in v.groups)]
@@ -109,6 +110,48 @@ report["reach_min"] = min(ext.values())
 report["reach_max"] = max(ext.values())
 nan = any(not np.isfinite(v).all() for v in frames.values())
 report["nan"] = bool(nan)
+
+# ---- folding quality: front triangles that flip, outline loop per frame -----
+# front sheet = first len(trace xy) vertices; its triangles are the first half
+nfront_tris = len(me.polygons) // 2
+tri = np.empty(len(me.polygons) * 3, np.int64)
+me.polygons.foreach_get("vertices", tri)
+tri = tri.reshape(-1, 3)[:nfront_tris]
+
+
+def signed_xz_area(v):
+    a, b, c = v[tri[:, 0]][:, [0, 2]], v[tri[:, 1]][:, [0, 2]], v[tri[:, 2]][:, [0, 2]]
+    return 0.5 * ((b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0]))
+
+
+a_rest = signed_xz_area(rest)
+flips = {f: int((np.sign(signed_xz_area(frames[f])) != np.sign(a_rest)).sum()) for f in frames}
+report["flipped_front_tris_per_frame"] = flips
+report["flipped_front_tris_max"] = max(flips.values())
+nloop = int(scene.get("iris_nloop", 0))
+if nloop:
+    np.savez_compressed(os.path.join(a.out, "loop_frames.npz"),
+                        rest=rest[:nloop][:, [0, 2]],
+                        **{f"f{f}": frames[f][:nloop][:, [0, 2]] for f in frames})
+
+# ---- cameras: every camera looks at the mascot from outside -------------------
+from bpy_extras.object_utils import world_to_camera_view  # noqa: E402
+
+cams = {}
+for cam_name in ("CAM_front_tilt", "CAM_front", "CAM_orbit"):
+    cam_ob = bpy.data.objects[cam_name]
+    worst = dict(min_depth=1e9, min_xy=1e9, max_xy=-1e9)
+    for f in (1, 12, 23, 46, 69, 90):
+        v = verts_at(f)
+        scene.frame_set(f)
+        pts = [world_to_camera_view(scene, cam_ob, Vector(p)) for p in v[::97]]
+        uvz = np.array([[p.x, p.y, p.z] for p in pts])
+        worst["min_depth"] = min(worst["min_depth"], float(uvz[:, 2].min()))
+        worst["min_xy"] = min(worst["min_xy"], float(uvz[:, :2].min()))
+        worst["max_xy"] = max(worst["max_xy"], float(uvz[:, :2].max()))
+    worst["ok"] = worst["min_depth"] > 0.5 and worst["min_xy"] > 0.0 and worst["max_xy"] < 1.0
+    cams[cam_name] = worst
+report["cameras"] = cams
 
 # ---- 1:1 front render ---------------------------------------------------------
 cam = bpy.data.objects["CAM_front"]

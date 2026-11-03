@@ -26,6 +26,112 @@ def iou(a, b):
     return float((a & b).sum() / max((a | b).sum(), 1))
 
 
+# --------------------------------------------------------------------------
+# geometry checks that do not need a render
+# --------------------------------------------------------------------------
+def loop_crossings(Q):
+    """Number of self-intersections of a closed polyline (outline loop)."""
+    from scipy.spatial import cKDTree
+    A, B = Q, np.roll(Q, -1, 0)
+    n = len(Q)
+    seg = np.linalg.norm(B - A, axis=1).max()
+    pairs = cKDTree((A + B) / 2).query_pairs(seg * 1.01, output_type="ndarray")
+    if len(pairs) == 0:
+        return 0
+    i, j = pairs[:, 0], pairs[:, 1]
+    keep = ~((np.abs(i - j) <= 1) | (np.abs(i - j) == n - 1))
+    i, j = i[keep], j[keep]
+
+    def orient(p, q, r):
+        return (q[:, 0] - p[:, 0]) * (r[:, 1] - p[:, 1]) - (q[:, 1] - p[:, 1]) * (r[:, 0] - p[:, 0])
+
+    a, b, c, d = A[i], B[i], A[j], B[j]
+    hit = (orient(a, b, c) * orient(a, b, d) < 0) & (orient(c, d, a) * orient(c, d, b) < 0)
+    return int(hit.sum())
+
+
+def project_raster(trace, hub, elev_deg, yaw_deg, S=4):
+    """Orthographic painter's-algorithm raster of the rest-pose mesh (front and
+    back sheets) seen from a camera raised by elev and turned by yaw, in
+    drawing pixels x S. Black = outline/face, yellow = body."""
+    xy, h, tris, mat = trace["xy"], trace["h"], trace["tris"], trace["mat"]
+    e, f = np.radians(elev_deg), np.radians(yaw_deg)
+    parts = []
+    for sgn in (1, -1):
+        X = xy[:, 0] - hub[0]
+        Y = -sgn * h
+        Z = -(xy[:, 1] - hub[1])
+        Xr = X * np.cos(f) - Y * np.sin(f)
+        Yr = X * np.sin(f) + Y * np.cos(f)
+        up = Yr * np.sin(e) + Z * np.cos(e)
+        depth = -Yr * np.cos(e) + Z * np.sin(e)
+        m = mat if sgn == 1 else np.where(mat == 2, 0, mat)
+        parts.append((Xr, -up, depth, m))
+    allx = np.concatenate([p[0] for p in parts])
+    ally = np.concatenate([p[1] for p in parts])
+    x0, y0 = allx.min() - 5, ally.min() - 5
+    img = np.full((int((ally.max() - y0 + 5) * S), int((allx.max() - x0 + 5) * S)), 255, np.uint8)
+    T, D, M = [], [], []
+    for sx, sy, dep, m in parts:
+        P = np.stack([(sx - x0) * S, (sy - y0) * S], 1)
+        T.append(P[tris])
+        D.append(dep[tris].mean(1))
+        M.append(m)
+    T, D, M = np.concatenate(T), np.concatenate(D), np.concatenate(M)
+    for i in np.argsort(D):
+        cv2.fillConvexPoly(img, np.round(T[i] * 16).astype(np.int32),
+                           0 if M[i] else 180, lineType=cv2.LINE_8, shift=4)
+    return img, x0, y0, S
+
+
+def outline_bands(img, x0, y0, S):
+    """Outline widths (drawing px) at fixed probes across the horizontal arms
+    (W, E: vertical cuts) and the vertical arms (S, N: horizontal cuts)."""
+    dark = img == 0
+
+    def runs(line):
+        out, i, n = [], 0, len(line)
+        while i < n:
+            if line[i]:
+                j = i
+                while j < n and line[j]:
+                    j += 1
+                out.append((i, j - i))
+                i = j
+            else:
+                i += 1
+        return out
+
+    def band(mode, v, lo, hi):
+        if mode == "col":
+            line = dark[:, int((v - x0) * S)]
+            r = [(p / S + y0, l / S) for p, l in runs(line)]
+        else:
+            line = dark[int((v - y0) * S), :]
+            r = [(p / S + x0, l / S) for p, l in runs(line)]
+        r = [l for p, l in r if lo <= p <= hi]
+        return (r[0], r[-1]) if len(r) >= 2 else None
+
+    probes = {"W": [("col", x, -150, 150) for x in (-520, -420, -320)],
+              "E": [("col", x, -150, 150) for x in (380, 530, 630)],
+              "S": [("row", y, -150, 150) for y in (250, 330, 410)]}
+    out = {}
+    for arm, ps in probes.items():
+        out[arm] = [band(*p) for p in ps]
+    return out
+
+
+def blender_checks_ok(rep):
+    cams = rep.get("cameras", {})
+    return dict(
+        loop_seamless=rep["loop_seam_max_err_m"] < 1e-5,
+        face_rigid=rep["face_rigidity_max_err_px"] < 0.05,
+        rest_equals_drawing=rep["rest_vs_base_max_err_m"] < 1e-5,
+        cameras_see_mascot=bool(cams) and all(c["ok"] for c in cams.values()),
+        few_flipped_tris=rep.get("flipped_front_tris_max", 10 ** 9) <= 150,
+    )
+
+
 def main(src, vdir):
     rep = json.load(open(os.path.join(vdir, "blender_checks.json")))
     m = rep["mapping"]
@@ -101,6 +207,43 @@ def main(src, vdir):
         yellow_render_median=np.median(rgb[yel_fill_r & ~face_r & (alpha > 0.99)], 0).tolist(),
         yellow_drawing_median=np.median(src_rgb[yellow_d & ~face_d], 0).tolist(),
     )
+    # ---- outline width from the angles the videos use (geometry, rest pose) ----
+    trace_path = os.path.join(os.path.dirname(os.path.abspath(vdir)), "iris_trace.npz")
+    trace = np.load(trace_path)
+    views = {"front": (0, 0), "tilt15": (15, 0), "orbit+20": (9, 20), "orbit-20": (9, -20)}
+    bands, band_ok = {}, True
+    for name, (el, yw) in views.items():
+        b = outline_bands(*project_raster(trace, (hx, hy), el, yw))
+        bands[name] = b
+        for arm, probes in b.items():
+            for pr in probes:
+                if pr is None:
+                    band_ok = False
+                    continue
+                lo, hi = min(pr), max(pr)
+                if lo < 11.0 or hi > 26.0 or lo / hi < 0.6:
+                    band_ok = False
+    res["outline_bands_px"] = bands
+    res["outline_bands_ok"] = band_ok
+
+    # ---- folding: the outline loop must never cross itself ---------------------
+    lf_path = os.path.join(vdir, "loop_frames.npz")
+    if os.path.exists(lf_path):
+        lf = np.load(lf_path)
+        cross = {k: loop_crossings(lf[k]) for k in lf.files}
+        res["loop_crossings"] = {k: v for k, v in cross.items() if v}
+        res["loop_crossings_total"] = int(sum(cross.values()))
+
+    checks = blender_checks_ok(rep)
+    res["pass"] = dict(
+        silhouette=res["silhouette_iou"] > 0.99,
+        outline_front=abs(res["outline_width_px"]["render"] - res["outline_width_px"]["drawing"]) < 1.5,
+        outline_angles=band_ok,
+        face=res["face_iou"] > 0.9,
+        no_fold_crossings=res.get("loop_crossings_total", 1) == 0,
+        **checks,
+    )
+    res["all_pass"] = all(res["pass"].values())
     with open(os.path.join(vdir, "compare.json"), "w") as f:
         json.dump(res, f, indent=1)
     print(json.dumps(res, indent=1))

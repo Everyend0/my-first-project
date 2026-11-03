@@ -20,7 +20,7 @@ namespace IrisViewer.EditorTools
     /// ├── DragArea        full screen, invisible: drag = rotate, wheel = zoom
     /// ├── TopBar          title (left) + interaction hint (right)
     /// ├── CameraPanel     bottom-left: Front + 15° / Front / Orbit ±20° (ToggleGroup)
-    /// └── PlaybackPanel   bottom-centre: Play/Pause, speed label, speed slider, Reset view
+    /// └── PlaybackPanel   bottom-right: Play/Pause, speed label, speed slider, Reset view
     /// </summary>
     public static class IrisViewerBuilder
     {
@@ -31,6 +31,7 @@ namespace IrisViewer.EditorTools
         private const string SceneDir = Root + "/Scenes";
         private const string ScenePath = SceneDir + "/IrisViewer.unity";
         private const float FloorGap = 0.30f; // same gap as the Blender scene
+        private const float BackWallDistance = 0.95f; // same as the Blender cyclorama
 
         // the mascot's colours, exactly as in the drawing
         private static readonly Color32 IrisYellow = new Color32(0xFE, 0xDB, 0x02, 0xFF);
@@ -51,6 +52,10 @@ namespace IrisViewer.EditorTools
             if (modelAsset == null)
             {
                 EditorUtility.DisplayDialog("Iris Viewer", "Model not found:\n" + ModelPath, "OK");
+                return;
+            }
+            if (!CheckRenderPipeline())
+            {
                 return;
             }
             if (!EnsureTmpEssentials())
@@ -85,7 +90,7 @@ namespace IrisViewer.EditorTools
             RenderSettings.ambientMode = AmbientMode.Flat;
             RenderSettings.ambientLight = new Color(0.84f, 0.84f, 0.84f);
             Light keyLight = MakeDirectionalLight("KeyLight", 0.55f, LightShadows.Soft);
-            keyLight.shadowStrength = 0.6f;
+            keyLight.shadowStrength = 1f;
             Light rimLight = MakeDirectionalLight("RimLight", 0.29f, LightShadows.None);
 
             // ---- camera
@@ -112,6 +117,7 @@ namespace IrisViewer.EditorTools
 
             var skinned = model.GetComponentInChildren<SkinnedMeshRenderer>();
             skinned.updateWhenOffscreen = true; // arms reach past the rest bounds
+            skinned.quality = SkinQuality.Bone4; // always use all 4 weights, whatever the quality level
             skinned.shadowCastingMode = ShadowCastingMode.On;
             skinned.sharedMaterials = skinned.sharedMaterials
                 .Select(m => m != null && m.name.Contains("Black") ? black : yellow)
@@ -127,7 +133,7 @@ namespace IrisViewer.EditorTools
             floor.name = "Floor";
             UnityEngine.Object.DestroyImmediate(floor.GetComponent<Collider>());
             floor.transform.position = new Vector3(rest.center.x, rest.min.y - FloorGap, rest.center.z);
-            floor.transform.localScale = new Vector3(8f, 1f, 8f);
+            floor.transform.localScale = new Vector3(20f, 1f, 20f);
             var floorRenderer = floor.GetComponent<MeshRenderer>();
             floorRenderer.sharedMaterial = floorMat;
             floorRenderer.shadowCastingMode = ShadowCastingMode.Off;
@@ -163,6 +169,22 @@ namespace IrisViewer.EditorTools
             dragSo.ApplyModifiedPropertiesWithoutUndo();
 
             controller.ApplyPresetNow(); // aim lights + camera so the scene looks right in edit mode
+
+            // back wall 0.95 m behind the mascot (as in the Blender scene) so the
+            // straight-on views show the shadow too; lit white like the floor
+            var wall = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            wall.name = "BackWall";
+            UnityEngine.Object.DestroyImmediate(wall.GetComponent<Collider>());
+            Vector3 front = controller.FrontDirection;
+            float wallHeight = 30f;
+            wall.transform.position = new Vector3(rest.center.x, rest.min.y - FloorGap + wallHeight * 0.5f,
+                rest.center.z) - front * BackWallDistance;
+            wall.transform.rotation = Quaternion.LookRotation(-front, Vector3.up); // visible side faces the camera
+            wall.transform.localScale = new Vector3(200f, wallHeight, 1f);
+            var wallRenderer = wall.GetComponent<MeshRenderer>();
+            wallRenderer.sharedMaterial = floorMat;
+            wallRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            wallRenderer.receiveShadows = true;
 
             EditorSceneManager.SaveScene(scene, ScenePath);
             AddSceneToBuild(ScenePath);
@@ -245,10 +267,10 @@ namespace IrisViewer.EditorTools
             ui.Front = MakeToggle("FrontToggle", cameraPanel, "Front", group, false);
             ui.Orbit = MakeToggle("OrbitToggle", cameraPanel, "Orbit ±20°", group, false);
 
-            // PlaybackPanel (bottom-centre)
+            // PlaybackPanel (bottom-right; never overlaps the camera panel down to 5:4)
             RectTransform playback = MakePanel("PlaybackPanel", root);
-            Place(playback, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
-                new Vector2(0f, 40f), new Vector2(940f, 104f));
+            Place(playback, new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(1f, 0f),
+                new Vector2(-40f, 40f), new Vector2(940f, 104f));
             var horizontal = playback.gameObject.AddComponent<UnityEngine.UI.HorizontalLayoutGroup>();
             horizontal.padding = new RectOffset(24, 24, 20, 20);
             horizontal.spacing = 22f;
@@ -343,6 +365,7 @@ namespace IrisViewer.EditorTools
             text.rectTransform.anchorMax = Vector2.one;
             text.rectTransform.offsetMin = new Vector2(52f, 0f);
             text.rectTransform.offsetMax = Vector2.zero;
+            text.raycastTarget = true; // clicking the label also switches the camera
 
             toggle.targetGraphic = boxImage;
             toggle.graphic = checkImage;
@@ -433,6 +456,36 @@ namespace IrisViewer.EditorTools
         // ------------------------------------------------------------------
         // assets
         // ------------------------------------------------------------------
+        /// <summary>
+        /// Built-in and URP are supported. HDRP drives background, ambient and
+        /// light units through Volumes, which this builder does not set up.
+        /// The lighting is calibrated for linear light intensity, which URP always
+        /// uses and the Built-in pipeline only uses when enabled.
+        /// </summary>
+        private static bool CheckRenderPipeline()
+        {
+            RenderPipelineAsset pipeline = GraphicsSettings.currentRenderPipeline;
+            if (pipeline != null && pipeline.GetType().Name.Contains("HDRenderPipeline"))
+            {
+                EditorUtility.DisplayDialog("Iris Viewer",
+                    "HDRP is not supported by this builder. Use the Built-in render pipeline or URP.", "OK");
+                return false;
+            }
+            if (pipeline == null && !GraphicsSettings.lightsUseLinearIntensity)
+            {
+                GraphicsSettings.lightsUseLinearIntensity = true;
+                Debug.Log("[Iris Viewer] Enabled Graphics > Lights Use Linear Intensity " +
+                          "(the lighting is calibrated for it).");
+            }
+            if (PlayerSettings.colorSpace != ColorSpace.Linear)
+            {
+                Debug.LogWarning("[Iris Viewer] Project colour space is Gamma. Iris's yellow is " +
+                                 "calibrated for Linear (Project Settings > Player > Other Settings > " +
+                                 "Color Space) and will look slightly off in Gamma.");
+            }
+            return true;
+        }
+
         private static bool EnsureTmpEssentials()
         {
             if (Resources.Load<TMP_Settings>("TMP Settings") != null)
@@ -456,12 +509,6 @@ namespace IrisViewer.EditorTools
             if (pipelineName.Contains("Universal"))
             {
                 shader = Shader.Find("Universal Render Pipeline/Lit");
-                colorProperty = "_BaseColor";
-                smoothnessProperty = "_Smoothness";
-            }
-            else if (pipelineName.Contains("HDRenderPipeline"))
-            {
-                shader = Shader.Find("HDRP/Lit");
                 colorProperty = "_BaseColor";
                 smoothnessProperty = "_Smoothness";
             }

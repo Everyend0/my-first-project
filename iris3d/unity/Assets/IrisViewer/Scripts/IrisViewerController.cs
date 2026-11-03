@@ -76,6 +76,8 @@ namespace IrisViewer
         private Quaternion pivotBaseRotation = Quaternion.identity;
 
         public IrisCameraMode Mode => mode;
+        /// <summary>Horizontal unit vector from the mascot towards its face side.</summary>
+        public Vector3 FrontDirection => front;
         public bool IsPlaying => playing;
 
         private void Awake()
@@ -184,14 +186,17 @@ namespace IrisViewer
             pitch = Mathf.Clamp(pitch - dragPixels.y * dragDegreesPerPixel, -maxPitchDegrees, maxPitchDegrees);
         }
 
-        /// <summary>Zoom in (positive) or out (negative) by scroll notches.</summary>
+        /// <summary>Zoom in (positive) or out (negative) by a scroll delta.</summary>
         public void ZoomBy(float scroll)
         {
             if (Mathf.Approximately(scroll, 0f))
             {
                 return;
             }
-            zoom = Mathf.Clamp(zoom * Mathf.Pow(1.1f, Mathf.Sign(scroll)), minZoom, maxZoom);
+            // one wheel notch = 1 (legacy input) or 120 (some Input System versions);
+            // trackpads send many small deltas, so scale by magnitude
+            float notches = Mathf.Abs(scroll) > 20f ? scroll / 120f : scroll;
+            zoom = Mathf.Clamp(zoom * Mathf.Pow(1.1f, Mathf.Clamp(notches, -3f, 3f)), minZoom, maxZoom);
         }
 
         // ------------------------------------------------------------------
