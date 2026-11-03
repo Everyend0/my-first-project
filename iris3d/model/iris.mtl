@@ -1,0 +1,33 @@
+# Iris mascot materials
+# Colours are the exact sRGB values of the original drawing:
+#   Iris_Yellow = #FEDB02 (254, 219, 2)   Iris_Black = #000000
+# Pr/Pm/Pc/Pcr are the PBR extension (roughness, metallic, clearcoat).
+
+newmtl Iris_Yellow
+Ka 0.000000 0.000000 0.000000
+Kd 0.996078 0.858824 0.007843
+Ks 0.300000 0.300000 0.300000
+Ke 0.000000 0.000000 0.000000
+Ns 180.000000
+Ni 1.500000
+d 1.000000
+illum 2
+Pr 0.420000
+Pm 0.000000
+Pc 0.350000
+Pcr 0.100000
+
+newmtl Iris_Black
+Ka 0.000000 0.000000 0.000000
+Kd 0.000000 0.000000 0.000000
+Ks 0.350000 0.350000 0.350000
+Ke 0.000000 0.000000 0.000000
+Ns 220.000000
+Ni 1.500000
+d 1.000000
+illum 2
+Pr 0.350000
+Pm 0.000000
+Pc 0.350000
+Pcr 0.100000
+
