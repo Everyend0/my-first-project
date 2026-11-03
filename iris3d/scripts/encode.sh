@@ -42,6 +42,13 @@ enc() {  # name frames_rendered (30 = 1 s loop played 3 times, 90 = all frames)
   echo "encoded $out ($probe)"
 }
 
-enc front_tilt 30
-enc front 30
-enc orbit 90
+# usage: encode.sh [front_tilt] [front] [orbit]   (default: all three)
+for name in "${@:-front_tilt front orbit}"; do
+  for n in $name; do
+    case $n in
+      front_tilt|front) enc "$n" 30 ;;
+      orbit) enc orbit 90 ;;
+      *) echo "unknown video: $n" >&2; exit 2 ;;
+    esac
+  done
+done
