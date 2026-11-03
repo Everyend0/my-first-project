@@ -8,11 +8,11 @@ mkdir -p "$OUT"
 
 enc() {  # name loop(0/1)
   local name=$1 loop=$2 n
-  n=$(ls "$FR/$name"/*.png | wc -l)
+  n=$(ls "$FR/$name/final"/*.png | wc -l)
   local loopopt=()
   [ "$loop" = 1 ] && loopopt=(-loop 1)
   ffmpeg -hide_banner -loglevel error -y \
-    -framerate 30 -start_number 1 "${loopopt[@]}" -i "$FR/$name/%04d.png" \
+    -framerate 30 -start_number 1 "${loopopt[@]}" -i "$FR/$name/final/%04d.png" \
     -frames:v 90 \
     -vf "scale=3840:2160:flags=lanczos:out_color_matrix=bt709:out_range=tv,format=yuv420p" \
     -c:v libx264 -preset slow -crf 14 -tune animation \

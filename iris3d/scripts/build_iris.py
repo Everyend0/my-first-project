@@ -427,7 +427,7 @@ def add_sun(name, strength, angle_deg, rot_deg):
     return ob
 
 
-# key light from upper-front-left, rim light from upper-back-right
+# key light from upper-front-left, rim light from upper-back-left
 key = add_sun("Key_Sun", KEY_STRENGTH, 6.0, (52.0, 0.0, -28.0))
 rim = add_sun("Rim_Sun", 0.9, 3.0, (-55.0, 0.0, 35.0))
 rim.data.use_shadow = False

@@ -59,10 +59,11 @@ def main(src, vdir):
 
     # render masks
     sil_r = alpha > 0.5
-    lum = rgb.max(2)
-    dark_r = sil_r & (lum < 100)
+    # same criterion as the drawing: green channel half-way between black and yellow
+    Gr = rgb[..., 1]
+    dark_r = sil_r & (Gr < 110)
     # yellow region (with the face strokes filled in); face = dark inside it
-    yel_fill_r = ndi.binary_fill_holes(sil_r & (rgb[..., 1] > 110) & (lum >= 100))
+    yel_fill_r = ndi.binary_fill_holes(sil_r & ~dark_r)
     yel_fill_r = cv2.morphologyEx(yel_fill_r.astype(np.uint8), cv2.MORPH_OPEN,
                                   np.ones((3, 3), np.uint8)).astype(bool)
     yel_fill_r = ndi.binary_fill_holes(yel_fill_r)
