@@ -31,7 +31,7 @@ namespace IrisViewer.EditorTools
         private const string SceneDir = Root + "/Scenes";
         private const string ScenePath = SceneDir + "/IrisViewer.unity";
         private const float FloorGap = 0.30f; // same gap as the Blender scene
-        private const float BackWallDistance = 0.95f; // same as the Blender cyclorama
+        private const float BackWallDistance = 0.95f; // Blender cyclorama distance (minimum)
 
         // the mascot's colours, exactly as in the drawing
         private static readonly Color32 IrisYellow = new Color32(0xFE, 0xDB, 0x02, 0xFF);
@@ -170,15 +170,19 @@ namespace IrisViewer.EditorTools
 
             controller.ApplyPresetNow(); // aim lights + camera so the scene looks right in edit mode
 
-            // back wall 0.95 m behind the mascot (as in the Blender scene) so the
-            // straight-on views show the shadow too; lit white like the floor
+            // back wall behind the mascot (like the Blender cyclorama) so the
+            // straight-on views show the shadow too; lit white like the floor.
+            // Dragging rotates the model about the pivot, so the wall must stay
+            // outside that sweep (rest radius x 1.05 covers the burst overshoot).
             var wall = GameObject.CreatePrimitive(PrimitiveType.Quad);
             wall.name = "BackWall";
             UnityEngine.Object.DestroyImmediate(wall.GetComponent<Collider>());
             Vector3 front = controller.FrontDirection;
             float wallHeight = 30f;
+            float sweep = new Vector2(rest.extents.x, rest.extents.z).magnitude * 1.05f + 0.05f;
+            float wallDistance = Mathf.Max(BackWallDistance, sweep);
             wall.transform.position = new Vector3(rest.center.x, rest.min.y - FloorGap + wallHeight * 0.5f,
-                rest.center.z) - front * BackWallDistance;
+                rest.center.z) - front * wallDistance;
             wall.transform.rotation = Quaternion.LookRotation(-front, Vector3.up); // visible side faces the camera
             wall.transform.localScale = new Vector3(200f, wallHeight, 1f);
             var wallRenderer = wall.GetComponent<MeshRenderer>();
@@ -460,7 +464,7 @@ namespace IrisViewer.EditorTools
         /// Built-in and URP are supported. HDRP drives background, ambient and
         /// light units through Volumes, which this builder does not set up.
         /// The lighting is calibrated for linear light intensity, which URP always
-        /// uses and the Built-in pipeline only uses when enabled.
+        /// uses; see LightIntensity for the Built-in pipeline.
         /// </summary>
         private static bool CheckRenderPipeline()
         {
@@ -470,12 +474,6 @@ namespace IrisViewer.EditorTools
                 EditorUtility.DisplayDialog("Iris Viewer",
                     "HDRP is not supported by this builder. Use the Built-in render pipeline or URP.", "OK");
                 return false;
-            }
-            if (pipeline == null && !GraphicsSettings.lightsUseLinearIntensity)
-            {
-                GraphicsSettings.lightsUseLinearIntensity = true;
-                Debug.Log("[Iris Viewer] Enabled Graphics > Lights Use Linear Intensity " +
-                          "(the lighting is calibrated for it).");
             }
             if (PlayerSettings.colorSpace != ColorSpace.Linear)
             {
@@ -617,13 +615,30 @@ namespace IrisViewer.EditorTools
             rt.offsetMax = offsetMax;
         }
 
+        /// <summary>
+        /// Intensities are calibrated for linear light intensity (URP, or Built-in
+        /// with Graphics &gt; Lights Use Linear Intensity). On Built-in without it,
+        /// Unity treats intensity as a gamma value, so convert instead of changing
+        /// the project-wide setting.
+        /// </summary>
+        private static float LightIntensity(float linearIntensity)
+        {
+            bool builtIn = GraphicsSettings.currentRenderPipeline == null;
+            if (builtIn && !GraphicsSettings.lightsUseLinearIntensity &&
+                PlayerSettings.colorSpace == ColorSpace.Linear)
+            {
+                return Mathf.Pow(linearIntensity, 1f / 2.2f);
+            }
+            return linearIntensity;
+        }
+
         private static Light MakeDirectionalLight(string name, float intensity, LightShadows shadows)
         {
             var go = new GameObject(name);
             var light = go.AddComponent<Light>();
             light.type = LightType.Directional;
             light.color = Color.white;
-            light.intensity = intensity;
+            light.intensity = LightIntensity(intensity);
             light.shadows = shadows;
             return light;
         }

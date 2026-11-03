@@ -193,10 +193,11 @@ namespace IrisViewer
             {
                 return;
             }
-            // one wheel notch = 1 (legacy input) or 120 (some Input System versions);
-            // trackpads send many small deltas, so scale by magnitude
-            float notches = Mathf.Abs(scroll) > 20f ? scroll / 120f : scroll;
-            zoom = Mathf.Clamp(zoom * Mathf.Pow(1.1f, Mathf.Clamp(notches, -3f, 3f)), minZoom, maxZoom);
+            // one wheel notch is 1 (legacy input), 6 (InputSystemUIInputModule
+            // default) or more: never zoom more than one 1.1x step per event, and
+            // scale the small deltas trackpads send so they zoom smoothly
+            float notches = Mathf.Clamp(scroll, -1f, 1f);
+            zoom = Mathf.Clamp(zoom * Mathf.Pow(1.1f, notches), minZoom, maxZoom);
         }
 
         // ------------------------------------------------------------------

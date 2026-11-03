@@ -16,7 +16,7 @@
 # Each frame is two passes: the mascot at full 4K ('char') and the soft
 # backdrop shadows at 25 % ('shadow'), composited over white by
 # composite_iris.py. Finished frames are skipped on a re-run, so after
-# changing the scene delete build/frames first.
+# changing the scene delete build/frames first (stills are always re-rendered).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 BL=scripts/blender.sh
@@ -40,6 +40,7 @@ render() {  # name camera start end
 }
 
 stills() {
+  rm -rf build/stills            # 4 short renders; never reuse stale stills
   mkdir -p renders
   # rest pose (the drawing's shape), straight on and from 15 deg above
   for cam in CAM_front CAM_front_tilt; do

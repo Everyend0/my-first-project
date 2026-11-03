@@ -393,7 +393,15 @@ for pb in pose.bones:
 for k, spec in enumerate(arm_specs):
     names = bone_names[k]
     comp = [j for j, r in enumerate(spec["rigid"]) if not r]
-    mins = dict(zip(comp, MIN_SCALE_FACE_ARM if spec["face"] else MIN_SCALE))
+    if spec["face"]:
+        # by role: joints below the face get the first values, the joint
+        # above the face (if any) the last one
+        below = [j for j in comp if j < spec["face_joint"]]
+        above = [j for j in comp if j > spec["face_joint"]]
+        mins = dict(zip(below, MIN_SCALE_FACE_ARM[:-1]))
+        mins.update({j: MIN_SCALE_FACE_ARM[-1] for j in above})
+    else:
+        mins = dict(zip(comp, MIN_SCALE))
     for f in range(1, LOOP + 2):
         tau = (f - 1) / LOOP
         for j, bn in enumerate(names):

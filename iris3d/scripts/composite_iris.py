@@ -7,7 +7,8 @@ For every ####.png in char_dir:
     shadow alpha (small render) is upscaled to full size with a smooth filter,
     background = white * (1 - shadow), then the mascot (straight-alpha RGBA)
     is laid over it. Writes 8-bit RGB PNGs.
-An output is (re)made when it is missing or older than either input. A char
+An output is (re)made when it is missing or older than either input or this
+script. A char
 frame without its shadow frame is an error (exit code 1).
 """
 import glob
@@ -61,7 +62,8 @@ def main(char_dir, shadow_dir, out_dir):
         if not os.path.exists(sp):
             missing.append(name)
             continue
-        if os.path.exists(op) and os.path.getmtime(op) >= max(os.path.getmtime(cp), os.path.getmtime(sp)):
+        newest = max(os.path.getmtime(cp), os.path.getmtime(sp), os.path.getmtime(__file__))
+        if os.path.exists(op) and os.path.getmtime(op) >= newest:
             continue
         composite(cp, sp, op)
         n += 1

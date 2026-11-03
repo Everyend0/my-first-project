@@ -50,6 +50,18 @@ def loop_crossings(Q):
     return int(hit.sum())
 
 
+def project_points(xy, h, hub, elev_deg, yaw_deg, sgn=1):
+    """Same orthographic view as project_raster, for points: (screen x, screen y down)."""
+    e, f = np.radians(elev_deg), np.radians(yaw_deg)
+    X = xy[:, 0] - hub[0]
+    Y = -sgn * h
+    Z = -(xy[:, 1] - hub[1])
+    Xr = X * np.cos(f) - Y * np.sin(f)
+    Yr = X * np.sin(f) + Y * np.cos(f)
+    up = Yr * np.sin(e) + Z * np.cos(e)
+    return Xr, -up
+
+
 def project_raster(trace, hub, elev_deg, yaw_deg, S=4):
     """Orthographic painter's-algorithm raster of the rest-pose mesh (front and
     back sheets) seen from a camera raised by elev and turned by yaw, in
@@ -84,9 +96,12 @@ def project_raster(trace, hub, elev_deg, yaw_deg, S=4):
     return img, x0, y0, S
 
 
-def outline_bands(img, x0, y0, S):
+def outline_bands(img, x0, y0, S, arm_lines):
     """Outline widths (drawing px) at fixed probes across the horizontal arms
-    (W, E: vertical cuts) and the vertical arms (S, N: horizontal cuts)."""
+    (W, E: vertical cuts) and the vertical arms (S, N: horizontal cuts).
+    Each cut only looks within +-HALF px of the probed arm's own projected
+    centre line, so a neighbouring arm is never measured by mistake."""
+    HALF = 95.0
     dark = img == 0
 
     def runs(line):
@@ -102,22 +117,29 @@ def outline_bands(img, x0, y0, S):
                 i += 1
         return out
 
-    def band(mode, v, lo, hi):
+    def band(arm, mode, v):
+        cx, cy = arm_lines[arm]
         if mode == "col":
+            order = np.argsort(cx)
+            c = np.interp(v, cx[order], cy[order])
             line = dark[:, int((v - x0) * S)]
             r = [(p / S + y0, l / S) for p, l in runs(line)]
         else:
+            order = np.argsort(cy)
+            c = np.interp(v, cy[order], cx[order])
             line = dark[int((v - y0) * S), :]
             r = [(p / S + x0, l / S) for p, l in runs(line)]
-        r = [l for p, l in r if lo <= p <= hi]
+        # runs whose span overlaps the window around the arm's centre
+        r = [l for p, l in r if p + l >= c - HALF and p <= c + HALF]
         return (r[0], r[-1]) if len(r) >= 2 else None
 
-    probes = {"W": [("col", x, -150, 150) for x in (-520, -420, -320)],
-              "E": [("col", x, -150, 150) for x in (380, 530, 630)],
-              "S": [("row", y, -150, 150) for y in (250, 330, 410)]}
+    probes = {"W": [("col", x) for x in (-520, -420, -320)],
+              "E": [("col", x) for x in (380, 530, 630)],
+              "N": [("row", y) for y in (-435, -405)],     # face arm: above the face, below the tip
+              "S": [("row", y) for y in (250, 330, 410)]}
     out = {}
     for arm, ps in probes.items():
-        out[arm] = [band(*p) for p in ps]
+        out[arm] = [band(arm, *p) for p in ps]
     return out
 
 
@@ -126,9 +148,9 @@ def blender_checks_ok(rep):
     return dict(
         loop_seamless=rep["loop_seam_max_err_m"] < 1e-5,
         face_rigid=rep["face_rigidity_max_err_px"] < 0.05,
-        rest_equals_drawing=rep["rest_vs_base_max_err_m"] < 1e-5,
+        rest_pose_identity=rep["rest_vs_base_max_err_m"] < 1e-5,
         cameras_see_mascot=bool(cams) and all(c["ok"] for c in cams.values()),
-        few_flipped_tris=rep.get("flipped_front_tris_max", 10 ** 9) <= 150,
+        few_flipped_tris=rep.get("flipped_front_tris_max", 10 ** 9) <= 5,
     )
 
 
@@ -211,9 +233,17 @@ def main(src, vdir):
     trace_path = os.path.join(os.path.dirname(os.path.abspath(vdir)), "iris_trace.npz")
     trace = np.load(trace_path)
     views = {"front": (0, 0), "tilt15": (15, 0), "orbit+20": (9, 20), "orbit-20": (9, -20)}
+    meta = json.load(open(os.path.join(os.path.dirname(trace_path), "iris_trace.json")))
+    want = {"E": 0.0, "N": 90.0, "W": 180.0, "S": -90.0}
+    arm_cl = {}
+    for key, ang in want.items():
+        arm = min(meta["arms"], key=lambda a: abs((a["angle_deg"] - ang + 180) % 360 - 180))
+        arm_cl[key] = np.array(arm["centerline"])
+    # arm centre lines lie on the mid-plane (h = 0), like the outline itself
     bands, band_ok = {}, True
     for name, (el, yw) in views.items():
-        b = outline_bands(*project_raster(trace, (hx, hy), el, yw))
+        lines = {k: project_points(cl, np.zeros(len(cl)), (hx, hy), el, yw) for k, cl in arm_cl.items()}
+        b = outline_bands(*project_raster(trace, (hx, hy), el, yw), lines)
         bands[name] = b
         for arm, probes in b.items():
             for pr in probes:
@@ -240,6 +270,7 @@ def main(src, vdir):
         outline_front=abs(res["outline_width_px"]["render"] - res["outline_width_px"]["drawing"]) < 1.5,
         outline_angles=band_ok,
         face=res["face_iou"] > 0.9,
+        colour=all(abs(a - b) <= 3.0 for a, b in zip(res["yellow_render_median"], res["yellow_drawing_median"])),
         no_fold_crossings=res.get("loop_crossings_total", 1) == 0,
         **checks,
     )

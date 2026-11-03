@@ -12,7 +12,7 @@
 4. `Assets/IrisViewer/Scenes/IrisViewer.unity`가 만들어져요. ▶ Play를 누르면 아이리스가 움직여요.
 
 Built-in과 URP 렌더 파이프라인을 자동으로 알아보고 알맞은 Lit 셰이더로 재질을 만들어요. HDRP는 지원하지 않아요(배경, 주변광, 조명 단위를 Volume으로 따로 설정해야 해서 빌더가 안내 창을 띄우고 멈춰요).
-조명은 선형 색 공간(Linear)에 맞춰 보정했어요. Built-in에서는 *Lights Use Linear Intensity*를 자동으로 켜고, 프로젝트가 Gamma 색 공간이면 콘솔에 경고를 남겨요.
+조명은 선형 색 공간(Linear)에 맞춰 보정했어요. 프로젝트 설정은 바꾸지 않아요. Built-in에서 *Lights Use Linear Intensity*가 꺼져 있으면 빛 세기를 거기에 맞게 바꿔서 넣고, 프로젝트가 Gamma 색 공간이면 콘솔에 경고를 남겨요.
 
 ## 화면 구성 (uGUI)
 
@@ -53,5 +53,5 @@ EventSystem         Input System 패키지가 있으면 InputSystemUIInputModule
 
 - 이 저장소를 만든 서버에는 Unity 에디터가 없어서 C# 코드를 실제 Unity로 컴파일하거나 실행해 보지는 못했어요. 처음 열 때 콘솔에 오류가 뜨면 알려 주세요.
 - UI 글자는 영어예요. TMP 기본 폰트(LiberationSans)에는 한글이 없어서, 한글을 쓰려면 한글 폰트로 TMP Font Asset을 만들어 Label들의 폰트를 바꿔 주세요.
-- 블렌더 씬처럼 흰 바닥(`Floor`)과 0.95m 뒤의 흰 벽(`BackWall`)이 그림자를 받아요. 그림자가 필요 없으면 둘 다 꺼 주세요.
+- 블렌더 씬처럼 흰 바닥(`Floor`)과 뒤쪽 흰 벽(`BackWall`)이 그림자를 받아요. 벽은 아이리스를 돌려도 닿지 않게 약 1.55m 뒤에 있어요(블렌더는 0.95m). 그림자가 필요 없으면 둘 다 꺼 주세요.
 - 화면 비율이 5:4보다 좁으면 두 패널이 겹칠 수 있어요.

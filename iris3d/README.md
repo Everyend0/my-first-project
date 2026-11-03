@@ -36,7 +36,7 @@
 참고 GIF는 1초짜리 루프예요. 덩어리 → 가시가 '팍' 뻗음 → 살짝 튕김 → 유지하며 떨림 → 쏙 들어감 순서로 움직여요.
 아이리스의 줄기 8개는 각각 마디 5개로 되어 있어요. 허브 쪽 4개는 접히는 마디이고, 끝 1개는 둥근 끝 모양을 지키는 단단한 마디예요.
 
-1. **접힘(1~5프레임)**: 마디마디가 허브 쪽으로 접혀 있어요. 허브 쪽 마디는 45%, 가운데는 25%, 끝 쪽은 50%까지 접혀서 줄기 전체 길이가 원래의 약 60%가 돼요.
+1. **접힘(30·1~4프레임)**: 마디마디가 허브 쪽으로 접혀 있어요. 허브 쪽 마디는 45%, 가운데는 25%, 끝 쪽은 50%까지 접혀서 줄기가 원래 길이의 약 58~72%가 돼요.
 2. **팍!**: 허브 쪽 마디부터 1.2프레임 간격으로 차례로 펴지면서(마디마디 물결) 원래 길이를 살짝 넘었다가 튕기듯 돌아와요.
 3. **꿈틀**: 다 뻗은 동안 마디마디를 따라 물결처럼 흔들려요. GIF에서 가시가 떨리는 부분이에요.
 4. **쏙**: 다시 허브 쪽으로 접혀 들어가요.
@@ -61,7 +61,7 @@ scripts/blender.sh -b --factory-startup --python-exit-code 1 --python scripts/bu
     --trace build/iris_trace.npz --meta build/iris_trace.json \
     --blend model/iris.blend --obj model/iris.obj       # 씬, 리그, 애니메이션, OBJ/MTL
 scripts/blender.sh -b model/iris.blend --python scripts/verify_iris.py -- --out build/verify
-python3 scripts/compare_iris.py source/iris.png build/verify   # 원본과 비교 → build/verify/compare.json ("all_pass")
+python3 scripts/compare_iris.py source/iris.png build/verify   # 원본과 비교 → build/verify/compare.json ("all_pass": true)
 rm -rf build/frames build/stills && scripts/render_all.sh      # 4K 렌더 + 합성 + MP4 인코딩 (CPU 4코어에서 약 5시간)
 scripts/blender.sh -b model/iris.blend --python scripts/export_unity_fbx.py -- \
     --out unity/Assets/IrisViewer/Models/iris_unity.fbx   # Unity용 FBX
@@ -78,11 +78,11 @@ scripts/blender.sh -b model/iris.blend --python scripts/export_unity_fbx.py -- \
 |---|---|
 | 실루엣 (정면 3D 렌더 vs 원본 그림) | IoU 0.998, 경계 평균 오차 0.13px |
 | 검은 외곽선 두께 (정면) | 18.36px (원본 18.38px), 외곽선 영역 IoU 0.989 |
-| 검은 외곽선 두께 (15° 위, ±20° 옆) | 줄기 위아래·좌우 모두 14~19px (원본 약 18px) |
+| 검은 외곽선 두께 (15° 위, ±20° 옆) | 4개 줄기 × 4개 시점에서 모두 14~20.5px (원본 약 18px) |
 | 눈·입 | IoU 0.948 (차이는 경계의 안티앨리어싱 0.3px 이하) |
-| 노란색 (빛 받는 면의 중앙값) | (253.6, 218.3, 4.7) vs 원본 (254, 219, 2) |
+| 노란색 (빛 받는 면의 중앙값) | (253.6, 218.3, 4.7) vs 원본 (254, 219, 2), 채널별 차이 3 이하 |
 | 얼굴 변형 (애니메이션 중) | 최대 0.0005px |
 | 루프 이음매 (1프레임 vs 31·61프레임) | 오차 0 |
-| 접힌 상태 외곽선 꼬임 | 30프레임 모두 0 |
+| 접힌 상태 외곽선 꼬임 | 30프레임 모두 0, 뒤집힌 삼각형은 프레임당 최대 1개 |
 | 카메라 3대 | 모든 프레임에서 아이리스 전체가 화면 안에 들어와요 |
 | OBJ | 닫힌 매니폴드 메시(구멍 없음), 노멀 바깥쪽, 정지 포즈 = 원본 모양 |
