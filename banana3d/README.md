@@ -1,0 +1,82 @@
+# 바나나 캐릭터 3D 모델 (banana3d)
+
+손그림 바나나 캐릭터 2개를 **모양 변형 없이** 3D로 만든 결과물입니다.
+
+| 캐릭터 | 원본 그림 | 3D 모델 | 렌더 |
+|---|---|---|---|
+| `banana_legs` (다리 벌린 바나나) | `src/banana_legs.png` | `output/banana_legs/banana_legs.obj` + `.mtl` | `output/banana_legs/renders/` |
+| `banana_arms` (팔 벌린 바나나) | `src/banana_arms.png` | `output/banana_arms/banana_arms.obj` + `.mtl` | `output/banana_arms/renders/` |
+
+## 폴더 구성 (캐릭터마다)
+
+```
+output/<이름>/
+  <이름>.obj / <이름>.mtl        3D 모델 + 재질 (미터 단위, +Y 위, 캐릭터 정면 = +Z)
+  <이름>.blend                    Blender 5.x 장면 (조명·카메라·외곽선 재질 세팅 완료)
+  <이름>_turnaround_sheet.png     8방향 한 장 요약
+  <이름>_drawing_vs_3d.png        원본 그림 vs 3D 정면 겹침 검사
+  <이름>_fidelity.json            겹침 검사 수치
+  renders/<이름>_000_front.png               정면
+          <이름>_045_front-right-diagonal.png 대각선 (앞-오른쪽)
+          <이름>_090_right-side.png           옆 (오른쪽)
+          <이름>_135_back-right-diagonal.png  대각선 (뒤-오른쪽)
+          <이름>_180_back.png                 뒤
+          <이름>_225_back-left-diagonal.png   대각선 (뒤-왼쪽)
+          <이름>_270_left-side.png            옆 (왼쪽)
+          <이름>_315_front-left-diagonal.png  대각선 (앞-왼쪽)
+          <이름>_front_ortho_match.png        원근 없는 정면 (검사용)
+```
+
+"오른쪽/왼쪽"은 캐릭터 기준입니다 (90° = 캐릭터의 오른쪽 옆모습).
+렌더는 턴테이블 방식이라 카메라와 조명은 고정, 캐릭터가 돕니다.
+
+## OBJ 안의 오브젝트
+
+| 오브젝트 | 재질 | 내용 |
+|---|---|---|
+| `Banana_Body` | `Banana_Yellow` | 노란 몸통 (그림의 테두리 안쪽 모양 그대로) |
+| `Banana_Tips_Black` | `Ink_Black` | 꼭지·발끝·팔끝 검은 부분 |
+| `Face_Eye_1`, `Face_Eye_2`, `Face_Mouth` | `Ink_Black` | 얼굴 (그림에서 그대로 따낸 모양, 표면에 살짝 붙어 있음) |
+| `Banana_BackPeelFlap` (다리 바나나만) | `Banana_Yellow` | 다리 사이로 보이는 뒤쪽 껍질 |
+| `InkLine_*` | `Ink_Line_Matte` | 몸 안쪽 선 (팔 이음매, 껍질 경계선) |
+| `Outline_Ink_*` | `Outline_Ink` | **만화 외곽선 껍데기** (아래 설명) |
+
+### 외곽선(`Outline_Ink_*`) 사용법
+
+그림의 두껍고 구불구불한 검은 테두리는 "인버티드 헐(inverted hull)" 방식으로 들어가 있습니다.
+몸보다 선 두께만큼 큰 껍데기를 안팎을 뒤집어 둔 것이라, **뒷면 컬링(back-face culling)이 켜진 곳**에서만 제대로 보입니다.
+
+- Unity / Unreal / 대부분의 웹 뷰어: 기본값이 뒷면 컬링이라 그대로 보입니다.
+- Blender에서 OBJ를 직접 불러올 때: `Outline_Ink` 재질 → Settings → *Backface Culling* 체크. (같이 들어 있는 `.blend` 파일은 이미 설정돼 있습니다.)
+- 외곽선 없이 쓰고 싶으면 `Outline_Ink_*` 오브젝트만 지우면 됩니다.
+
+- 외곽선을 지우면 발끝이 바닥에서 선 두께(약 3~4 cm)만큼 떠 있게 됩니다. 바닥에 세우려면 모델을 그만큼 내려 주세요.
+
+선 두께는 그림에서 직접 잰 값입니다. 정면·뒷면 실루엣에서는 그림과 똑같은 두께이고,
+옆·대각선에서 새로 생기는 테두리는 손으로 그린 선처럼 두께가 조금씩 출렁이게 했습니다.
+
+### 재질(MTL) 메모
+
+- `Kd` 값은 OBJ 관례대로 sRGB(화면 색) 기준입니다. Unity·웹 뷰어에서는 그대로 맞습니다.
+- Blender의 OBJ 가져오기는 `Kd`를 선형 값으로 읽어 노랑이 살짝 연해집니다. Blender에서는 같이 들어 있는 `.blend`를 쓰거나, Base Color를 (1.0, 0.88, 0.003)으로 바꿔 주세요.
+- 법선(`vn`)은 꼭지 경계처럼 각진 곳에서 갈라 두어서, 검정·노랑 경계에 음영 번짐이 없습니다.
+
+## Unity 물리 (충돌)
+
+`unity/BananaPhysics.cs` 를 모델 루트에 붙이면 끝입니다.
+
+- 팔·다리마다 캡슐 콜라이더를 만듭니다. 오목한 모양이라 MeshCollider는 움직이는 Rigidbody에서 무시되고, Convex로 하면 다리 사이가 막히기 때문입니다.
+- 루트에 Rigidbody 하나를 둡니다 (Continuous Speculative).
+- `Outline_Ink_*` 에는 절대 콜라이더를 달지 마세요. 안팎이 뒤집힌 메쉬라 물체를 안으로 빨아들입니다. 임포트 설정의 *Generate Colliders*도 꺼 두세요.
+- 충돌 콜백 `OnCollisionEnter(Collision c)` 은 루트 오브젝트에서 받습니다.
+- 캡슐 미리보기: `output/<이름>/<이름>_colliders_preview.png`
+- 디버그용 `unity/CollisionDebugger.cs` 는 부딪히는 두 오브젝트에 붙여 콘솔을 확인한 뒤 지우면 됩니다.
+
+## 어떻게 만들었나 (캐릭터 변형 없음)
+
+1. **그림 분석** (`pipeline/segment.py`): 그림을 2배 해상도로 키워 노란 면, 바깥 테두리, 검은 꼭지, 얼굴, 안쪽 선을 서브픽셀 정확도로 분리. 테두리 두께도 위치마다 측정.
+2. **부풀리기** (`pipeline/build_mesh.py`): 테두리 안쪽 모양을 그대로 경계로 두고 푸아송 방정식으로 풍선처럼 부풀림. 정면에서 보면 외곽이 그림과 픽셀 단위로 같고, 구불구불한 손그림 떨림도 그대로 남습니다. 검은 꼭지·얼굴은 그림의 잉크 경계를 따라 잘라 냈습니다.
+3. **장면·렌더** (`pipeline/scene.py`): Blender Cycles, 스튜디오 배경, 키/필/림 조명 → 바닥 그림자, 몸통 음영, 코팅된 장난감 같은 하이라이트 반사.
+4. **검사** (`pipeline/compare.py`): 원근 없는 정면 렌더를 원본 그림에 겹쳐서 어긋난 픽셀을 셉니다 (`*_drawing_vs_3d.png`).
+
+다시 만들기: `pip install bpy scipy scikit-image pyamg pillow` 후 `pipeline/run_all.sh`.
