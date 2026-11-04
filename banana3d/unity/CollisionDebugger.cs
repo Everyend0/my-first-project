@@ -3,13 +3,16 @@ using UnityEngine;
 /// Attach to both objects in a suspect pair. Remove after diagnosis.
 public class CollisionDebugger : MonoBehaviour
 {
-    void Awake()
+    void Start()   // Start, so colliders built in BananaPhysics.Awake are counted
     {
-        var col = GetComponent<Collider>();
+        // compound bodies (e.g. a banana with BananaPhysics) keep their colliders on
+        // child objects; count those too
+        var cols = GetComponentsInChildren<Collider>();
+        var col = cols.Length > 0 ? cols[0] : null;
         var rb  = GetComponent<Rigidbody>();
         Debug.Log(
             $"[Setup] {name} | layer={gameObject.layer} ({LayerMask.LayerToName(gameObject.layer)}) " +
-            $"| collider={(col != null ? col.GetType().Name : "none")} " +
+            $"| colliders={cols.Length} ({(col != null ? col.GetType().Name : "none")}) " +
             $"| isTrigger={(col != null ? col.isTrigger.ToString() : "n/a")} " +
             $"| rigidbody={(rb != null ? (rb.isKinematic ? "Kinematic" : "Dynamic") : "none")} " +
             $"| active={gameObject.activeInHierarchy}",

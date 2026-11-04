@@ -37,8 +37,10 @@ output/<이름>/
 | `Banana_Body` | `Banana_Yellow` | 노란 몸통 (그림의 테두리 안쪽 모양 그대로) |
 | `Banana_Tips_Black` | `Ink_Black` | 꼭지·발끝·팔끝 검은 부분 |
 | `Face_Eye_1`, `Face_Eye_2`, `Face_Mouth` | `Ink_Black` | 얼굴 (그림에서 그대로 따낸 모양, 표면에 살짝 붙어 있음) |
-| `Banana_BackPeelFlap` (다리 바나나만) | `Banana_Yellow` | 다리 사이로 보이는 뒤쪽 껍질 |
-| `InkLine_*` | `Ink_Line_Matte` | 몸 안쪽 선 (팔 이음매, 껍질 경계선) |
+| `Banana_BackPeelFlap` (다리 바나나만) | `Banana_Yellow` | 다리 사이로 보이는 뒤쪽 껍질 조각. 몸 뒤에 붙어 있어서 뒤에서 보면 둥근 껍질 조각 + 테두리로 보입니다 |
+| `InkLine_ArmSeam_N` / `_Back` (팔 바나나) | `Ink_Line_Matte` | 팔과 몸 사이 선 (앞·뒤 표면에 그린 선) |
+| `InkLine_LegSplit` (다리 바나나) | `Ink_Line_Matte` | 다리 갈라지는 선의 윗부분 |
+| `InkLine_FlapSeam_N` (다리 바나나) | `Ink_Line_Matte` | 다리와 뒤쪽 껍질 사이 선 |
 | `Outline_Ink_*` | `Outline_Ink` | **만화 외곽선 껍데기** (아래 설명) |
 
 ### 외곽선(`Outline_Ink_*`) 사용법
@@ -58,24 +60,28 @@ output/<이름>/
 ### 재질(MTL) 메모
 
 - `Kd` 값은 OBJ 관례대로 sRGB(화면 색) 기준입니다. Unity·웹 뷰어에서는 그대로 맞습니다.
+- 정점은 소수 6자리로 쓰면서 겹치는 점을 합쳐 두어서, 각 오브젝트가 구멍 없이 닫혀 있습니다.
 - Blender의 OBJ 가져오기는 `Kd`를 선형 값으로 읽어 노랑이 살짝 연해집니다. Blender에서는 같이 들어 있는 `.blend`를 쓰거나, Base Color를 (1.0, 0.88, 0.003)으로 바꿔 주세요.
 - 법선(`vn`)은 꼭지 경계처럼 각진 곳에서 갈라 두어서, 검정·노랑 경계에 음영 번짐이 없습니다.
 
 ## Unity 물리 (충돌)
 
-`unity/BananaPhysics.cs` 를 모델 루트에 붙이면 끝입니다.
+`unity/BananaPhysics.cs` 를 모델 루트에 붙이면 끝입니다. 다리/팔 바나나는 모델 안의 오브젝트 이름(`Banana_BackPeelFlap`, `InkLine_ArmSeam_*`)으로 알아서 구분합니다.
 
 - 팔·다리마다 캡슐 콜라이더를 만듭니다. 오목한 모양이라 MeshCollider는 움직이는 Rigidbody에서 무시되고, Convex로 하면 다리 사이가 막히기 때문입니다.
+- 캡슐 반지름에 검은 외곽선 두께 대부분을 포함해서, 물체가 외곽선에 닿는 순간 부딪힙니다 (선 안으로 파묻히지 않음). 바닥에 세우면 외곽선 아래쪽이 바닥에 닿습니다.
+- 다리 바나나의 뒤쪽 껍질 조각은 메쉬 크기에 맞춘 BoxCollider 하나로 처리합니다.
+- 임포트 배율과 Unity의 OBJ X축 반전은 `Banana_Body`·`Face_Mouth` 메쉬 크기로 자동 보정합니다. 메쉬 Read/Write 설정은 필요 없습니다.
 - 루트에 Rigidbody 하나를 둡니다 (Continuous Speculative).
-- `Outline_Ink_*` 에는 절대 콜라이더를 달지 마세요. 안팎이 뒤집힌 메쉬라 물체를 안으로 빨아들입니다. 임포트 설정의 *Generate Colliders*도 꺼 두세요.
-- 충돌 콜백 `OnCollisionEnter(Collision c)` 은 루트 오브젝트에서 받습니다.
-- 캡슐 미리보기: `output/<이름>/<이름>_colliders_preview.png`
-- 디버그용 `unity/CollisionDebugger.cs` 는 부딪히는 두 오브젝트에 붙여 콘솔을 확인한 뒤 지우면 됩니다.
+- `Outline_Ink_*` 에는 절대 콜라이더를 달지 마세요. 안팎이 뒤집힌 메쉬라 물체를 안으로 빨아들입니다. 임포트 설정의 *Generate Colliders*도 꺼 두세요. (스크립트가 다른 콜라이더를 지우고, 프리팹 안이라 못 지우면 꺼 둡니다.)
+- 충돌 콜백 `OnCollisionEnter(Collision c)` 은 루트 오브젝트(Rigidbody 있는 곳)에서 받습니다. 캡슐은 그 아래 `Colliders` 자식에 있습니다.
+- 캡슐 미리보기: `output/<이름>/<이름>_colliders_preview.png`, 수치: `<이름>_colliders.json`
+- 디버그용 `unity/CollisionDebugger.cs` 는 바나나 루트와 부딪히는 상대 오브젝트에 붙여 콘솔을 확인한 뒤 지우면 됩니다.
 
 ## 어떻게 만들었나 (캐릭터 변형 없음)
 
 1. **그림 분석** (`pipeline/segment.py`): 그림을 2배 해상도로 키워 노란 면, 바깥 테두리, 검은 꼭지, 얼굴, 안쪽 선을 서브픽셀 정확도로 분리. 테두리 두께도 위치마다 측정.
-2. **부풀리기** (`pipeline/build_mesh.py`): 테두리 안쪽 모양을 그대로 경계로 두고 푸아송 방정식으로 풍선처럼 부풀림. 정면에서 보면 외곽이 그림과 픽셀 단위로 같고, 구불구불한 손그림 떨림도 그대로 남습니다. 검은 꼭지·얼굴은 그림의 잉크 경계를 따라 잘라 냈습니다.
+2. **부풀리기** (`pipeline/build_mesh.py`): 테두리 안쪽 모양을 그대로 경계로 두고 푸아송 방정식으로 풍선처럼 부풀림. 정면에서 보면 외곽이 그림과 픽셀 단위로 같고, 구불구불한 손그림 떨림도 그대로 남습니다 (스캔 픽셀 계단만 1px 정도로 다듬어서 옆에서 봐도 광택이 매끈합니다). 검은 꼭지·얼굴은 그림의 잉크 경계를 따라 잘라 냈고, 몸 안쪽 선은 표면에 그려 넣었습니다.
 3. **장면·렌더** (`pipeline/scene.py`): Blender Cycles, 스튜디오 배경, 키/필/림 조명 → 바닥 그림자, 몸통 음영, 코팅된 장난감 같은 하이라이트 반사.
 4. **검사** (`pipeline/compare.py`): 원근 없는 정면 렌더를 원본 그림에 겹쳐서 어긋난 픽셀을 셉니다 (`*_drawing_vs_3d.png`).
 

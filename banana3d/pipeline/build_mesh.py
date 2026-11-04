@@ -25,9 +25,15 @@ from scipy import ndimage as ndi
 from scipy import sparse
 from skimage import measure
 
+# fill_strokes: inner ink lines that do NOT separate two body parts are painted on
+#   the surface instead of being cut into it ("all" = every stroke, "spike" = the part
+#   of a stroke farther than spike_d (2x px) from the back flap).  Cutting them made
+#   deep grooves that looked like cracks and torn flakes from the diagonal views.
 CFG = {
-    "banana_legs": dict(k=0.9, flap_k=0.62, flap_ext=70, web=False, paint_strokes_on_flap=True),
-    "banana_arms": dict(k=0.9, flap_k=0.62, flap_ext=70, web=True, paint_strokes_on_flap=False),
+    "banana_legs": dict(k=0.9, flap_k=0.42, flap_ext=56, fill_strokes="spike", spike_d=40,
+                        seam_name="legsplit", seam_back=False, paint_strokes_on_flap=True),
+    "banana_arms": dict(k=0.9, flap_k=0.42, flap_ext=56, fill_strokes="all", spike_d=0,
+                        seam_name="armseam", seam_back=True, paint_strokes_on_flap=False),
 }
 
 
@@ -62,21 +68,27 @@ def poisson(mask):
     return u
 
 
-def inflate_field(mask, U):
+def inflate_field(mask, U, blur=2.0):
     """Poisson solution extended smoothly outside, zero level centred on the mask
-    edge, returned in ORIGINAL-pixel^2 units on the 2x grid."""
+    edge, returned in ORIGINAL-pixel^2 units on the 2x grid.
+
+    The edge slope is averaged ALONG the edge before it is used: taking it per edge
+    pixel gave every pixel-staircase step its own offset, which showed up as fine
+    horizontal ribbing in glossy highlights at grazing angles (side views)."""
+    # sub-pixel smoothing of the traced edge: removes raster/scan jitter (period of a
+    # few px) but keeps the hand-drawn wobble (tens of px) - so the front outline
+    # still matches the drawing while side views get clean highlights
+    mask = ndi.gaussian_filter(mask.astype(np.float32), 3.0) > 0.5
     u = poisson(mask)
-    d_in, ind_in = ndi.distance_transform_edt(mask, return_indices=True)
-    # gradient estimate at the edge: value of the nearest inside pixel
-    d_out, ind = ndi.distance_transform_edt(~mask, return_indices=True)
-    G = u[ind[0], ind[1]]  # inside pixels map to themselves -> u (unused there)
-    # for inside pixels use the slope of the nearest edge pixel
+    d_out = ndi.distance_transform_edt(~mask)
     edge = mask & ~ndi.binary_erosion(mask)
+    num = ndi.gaussian_filter(np.where(edge, u, 0.0), 3.0)
+    den = ndi.gaussian_filter(edge.astype(float), 3.0)
+    Gs = num / np.maximum(den, 1e-9)
     _, ind_e = ndi.distance_transform_edt(~edge, return_indices=True)
-    G_edge = u[ind_e[0], ind_e[1]]
-    Gf = np.where(mask, G_edge, G)
+    Gf = Gs[ind_e[0], ind_e[1]]
     uf = np.where(mask, u - 0.5 * Gf, -Gf * (d_out - 0.5))
-    uf = ndi.gaussian_filter(uf, 1.0)
+    uf = ndi.gaussian_filter(uf, blur)
     return uf / (U * U)
 
 
@@ -146,8 +158,9 @@ def hull_shell(u2, k, z_off, hmax, region, T1, U, seed, A=0.5):
     y0, x0 = y0 // 2 * 2, x0 // 2 * 2
     y1, x1 = min(u2.shape[0], (y1 + 1) // 2 * 2), min(u2.shape[1], (x1 + 1) // 2 * 2)
     u1 = down2(u2[y0:y1, x0:x1])
-    zs = np.arange(np.floor(z_off - hmax - M - 2), np.ceil(z_off + hmax + M + 2) + 1, 1.0)
-    solid = (u1[:, :, None] - ((zs[None, None, :] - z_off) / k) ** 2) >= 0
+    zc = down2(z_off[y0:y1, x0:x1])[:, :, None] if np.ndim(z_off) == 2 else z_off
+    zs = np.arange(np.floor(np.min(zc) - hmax - M - 2), np.ceil(np.max(zc) + hmax + M + 2) + 1, 1.0)
+    solid = (u1[:, :, None] - ((zs[None, None, :] - zc) / k) ** 2) >= 0
     t = time.time()
     dist = ndi.distance_transform_edt(~solid).astype(np.float32)
     del solid
@@ -168,20 +181,85 @@ def bbox(mask, pad):
     return max(ys.min() - pad, 0), ys.max() + pad + 1, max(xs.min() - pad, 0), xs.max() + pad + 1
 
 
+def flap_region(reg, main, strokes, D_bg, medT, U, R):
+    """Whole back peel flap (2x grid).  Only `reg` is visible from the front; the
+    rest hides behind the legs.  The hidden part is the drawn flap grown by R, cut
+    below by the drawn bottom arc continued as a smooth curve, then rounded - so
+    from behind it reads as ONE simple rounded flap (no steps or notches)."""
+    H2, W2 = reg.shape
+    ys, xs = np.nonzero(reg)
+    cols = np.unique(xs)
+    bot = np.array([ys[xs == c].max() for c in cols])
+    on_arc = D_bg[bot, cols] / U <= 1.6 * medT  # bottom pixels that touch the outline arc
+    if on_arc.sum() >= 5:
+        cf = np.polyfit(cols[on_arc], bot[on_arc] + 0.5, 2)
+    else:
+        cf = np.array([0.0, 0.0, bot.max() + 0.5])
+    X = np.arange(W2)
+    yc = np.polyval(cf, X)
+    above = np.arange(H2)[:, None] <= yc[None, :]
+    allowed = reg | main | (ndi.distance_transform_edt(~strokes) <= 3)
+    ext = (ndi.distance_transform_edt(~reg) <= R) & above & allowed
+    ext = ndi.distance_transform_edt(ndi.distance_transform_edt(~ext) <= 12) > 12  # close
+    ext = ndi.distance_transform_edt(~(ndi.distance_transform_edt(ext) > 14)) <= 14  # open (round corners)
+    ext = (ext & above & allowed) | reg
+    ext = ndi.distance_transform_edt(ndi.distance_transform_edt(~ext) <= 4) > 4
+    return (ext & allowed) | reg, cf
+
+
+def flap_depth(region, u_f, k_f, u_m, k_m, Tf2, U, pad=100):
+    """Per-pixel depth centre (2x grid) for the flap: it follows the back of the
+    body, sitting just far enough behind it that its own ink outline (width Tf)
+    shows all round from behind and nothing pokes through the body."""
+    H2, W2 = region.shape
+    y0, y1, x0, x1 = bbox(region, pad)
+    sl = (slice(y0, y1), slice(x0, x1))
+    zb = -k_m * np.sqrt(np.maximum(u_m[sl], 0))  # body back surface (0 where no body)
+    r = int(round(float(Tf2[sl][region[sl]].max()) * U))
+    zb_n = ndi.grey_erosion(zb, footprint=disk(r))  # deepest body point within a line width
+    hf = k_f * np.sqrt(np.maximum(u_f[sl], 0))
+    need = np.maximum(hf + 1.5, 1.15 * Tf2[sl] + 1.5)
+    c = zb_n - need
+    z = c.copy()
+    for _ in range(40):
+        z = ndi.gaussian_filter(np.minimum(z, c), 4.0)
+    reg_c = ndi.binary_dilation(region[sl], structure=disk(r))
+    viol = float(np.max((z - c)[reg_c]))
+    if viol > 0:
+        z -= viol
+    out = np.full((H2, W2), float(np.median(z[region[sl]])))
+    out[sl] = z
+    return out
+
+
 def build(name, seg_npz, out_npz):
     cfg = CFG[name]
     d = np.load(seg_npz)
     U = int(d["U"])
-    S, I, parts = d["S"], d["I"], d["parts"]
+    S, I, parts = d["S"], d["I"].copy(), d["parts"].copy()
     caps, face, strokes = d["caps"], d["face"], d["strokes"]
     H2, W2 = S.shape
     pieces = {}
     meta = {"parts": []}
+    B = S & ~I & ~strokes  # outer outline band
+
+    # ---------- inner strokes that get painted instead of cut --------------------
+    fill = np.zeros_like(strokes)
+    if cfg["fill_strokes"] == "all":
+        fill = strokes.copy()
+    elif cfg["fill_strokes"] == "spike" and parts.max() >= 2:
+        cand = strokes & (ndi.distance_transform_edt(parts != 2) > cfg["spike_d"])
+        lab, n = ndi.label(cand, structure=np.ones((3, 3)))
+        for i in range(1, n + 1):
+            if (lab == i).sum() >= 200:
+                fill |= lab == i
+    parts[fill] = 1
+    I |= fill
+    strokes_cut = strokes & ~fill
 
     # ---------- outline width field T (orig px) --------------------------------
     D_bg = ndi.distance_transform_edt(S)
     edgeI = I & ~ndi.binary_erosion(I)
-    B = S & ~I & ~strokes
     near_B = ndi.binary_dilation(B, structure=np.ones((3, 3)), iterations=2)
     medT = float(np.median(D_bg[edgeI & near_B])) / U
     # outline thickness = distance from the inner body edge to the outer ink edge;
@@ -208,52 +286,49 @@ def build(name, seg_npz, out_npz):
     fields = {}
     for p in range(1, nparts + 1):
         reg = parts == p
+        Th = T1
         if p == 1:
             k, z_off, region = cfg["k"], 0.0, reg
         else:
-            # secondary part (peel flap seen between the legs): it hangs BEHIND the
-            # main body, so extend it under the main part where it is hidden
-            ext = ndi.distance_transform_edt(~reg) <= cfg["flap_ext"]
-            # never let the hidden part hang below the drawn bottom arc (no 'fangs')
-            arc = reg & (D_bg / U <= 1.6 * medT)  # the drawn bottom arc (borders the background ink)
-            y_corner = np.nonzero(arc)[0].min() if arc.any() else np.nonzero(reg)[0].max()
-            above = np.arange(H2)[:, None] <= y_corner
-            ext &= above
-            allowed = reg | main | (ndi.distance_transform_edt(~strokes) <= 3)
-            region = ext & allowed
-            # smooth the hidden outline (closing then opening, via distance maps)
-            region = ndi.distance_transform_edt(ndi.distance_transform_edt(~region) <= 12) > 12
-            region &= allowed
-            region = (ndi.distance_transform_edt(~(ndi.distance_transform_edt(region) > 6)) <= 6)
-            region = (region & above) | reg
+            # back peel flap seen between the legs: a separate piece hanging BEHIND
+            # the body; its hidden part tucks under the legs
+            region, cf = flap_region(reg, main, strokes_cut, D_bg, medT, U, cfg["flap_ext"])
+            meta["flap_arc_fit"] = [round(float(c), 6) for c in cf]
             k = cfg["flap_k"]
-            z_off = None
+            # its ink line: drawn width on the visible bottom arc, inner-line weight
+            # (like the drawn strokes) on the edge that only shows from behind
+            arc_vis = reg & (D_bg / U <= 1.6 * medT)
+            w = smoothstep(4.0, 14.0, ndi.distance_transform_edt(~arc_vis) / U)
+            Tf2 = (1 - w) * T2 + w * np.minimum(T2, 0.72 * medT)
+            Th = down2(Tf2)
         t = time.time()
         u2 = inflate_field(region, U)
         print(f"  part {p}: poisson {region.sum()} px ({time.time() - t:.1f}s)", flush=True)
         hmax = k * np.sqrt(max(u2.max(), 0))
-        if z_off is None:
-            # seen from behind, the flap's rim must stand clear of the body's back
-            # surface by about one line width, so its ink outline shows all round
+        if p != 1:
             u_m, k_m = fields[1][0], fields[1][1]
-            rim = region & ~ndi.binary_erosion(region) & main
-            h_rim = k_m * np.sqrt(np.maximum(u_m[rim], 0)) if rim.any() else np.array([hmax])
-            z_off = -max(hmax + 4.0, float(np.percentile(h_rim, 90)) + 0.9 * medT)
+            z_off = flap_depth(region, u2, k, u_m, k_m, Tf2, U)
+            zr = z_off[region]
+            meta["parts"].append(dict(part=p, k=k, z_centre_min=round(float(zr.min()), 2),
+                                      z_centre_max=round(float(zr.max()), 2), hmax=round(float(hmax), 2),
+                                      area_px=int(region.sum()) // (U * U)))
+        else:
+            meta["parts"].append(dict(part=p, k=k, z_off=0.0, hmax=round(float(hmax), 2),
+                                      area_px=int(region.sum()) // (U * U)))
         fields[p] = (u2, k, z_off, region)
-        meta["parts"].append(dict(part=p, k=k, z_off=round(float(z_off), 2), hmax=round(float(hmax), 2),
-                                  area_px=int(region.sum()) // (U * U)))
 
         # 1x grid volume
         y0, y1, x0, x1 = bbox(region, 8)
         y0, x0 = y0 // 2 * 2, x0 // 2 * 2
         y1, x1 = min(H2, (y1 + 1) // 2 * 2), min(W2, (x1 + 1) // 2 * 2)
         u1 = down2(u2[y0:y1, x0:x1])
-        zs = np.arange(np.floor(z_off - hmax - 3), np.ceil(z_off + hmax + 3) + 1, 1.0)
-        F = u1[:, :, None] - ((zs[None, None, :] - z_off) / k) ** 2
+        zc = down2(z_off[y0:y1, x0:x1])[:, :, None] if np.ndim(z_off) == 2 else z_off
+        zs = np.arange(np.floor(np.min(zc) - hmax - 3), np.ceil(np.max(zc) + hmax + 3) + 1, 1.0)
+        F = u1[:, :, None] - ((zs[None, None, :] - zc) / k) ** 2
         F = F.astype(np.float32)
         origin = (x0 / U + 0.5, y0 / U + 0.5, zs[0])
         # toon outline shell = true 3D offset surface of the part (no folds)
-        hv, hf = hull_shell(u2, k, z_off, hmax, region, T1, U, seed=p)
+        hv, hf = hull_shell(u2, k, z_off, hmax, region, Th, U, seed=p, A=0.5 if p == 1 else 0.2)
         pieces[f"part{p}_hull_v"], pieces[f"part{p}_hull_f"] = taubin(hv, hf), hf
 
         cap_here = caps & ndi.binary_dilation(region, structure=disk(4))
@@ -271,15 +346,19 @@ def build(name, seg_npz, out_npz):
             pieces[f"part{p}_yellow_v"], pieces[f"part{p}_yellow_f"] = taubin(v, f), f
         del F
 
-    # ---------- thin black decals on a part's FRONT surface --------------------
-    def decal(mask, p, tag, a=2.0, delta=0.6):
+    # ---------- thin black decals on a part's surface ----------------------------
+    def decal(mask, p, tag, a=2.0, delta=0.6, side=1):
+        """side=+1: front surface, side=-1: back surface (mirror image)"""
         u2, k, z_off, region = fields[p]
         y0, y1, x0, x1 = bbox(mask, 6)
         s = signed_dist(mask, U)[y0:y1, x0:x1]
-        hf = z_off + k * np.sqrt(np.maximum(u2[y0:y1, x0:x1], 0))
-        zlo, zhi = np.floor(hf[mask[y0:y1, x0:x1]].min() - a - 2), np.ceil(hf.max() + delta + 2)
+        zc = z_off[y0:y1, x0:x1] if np.ndim(z_off) == 2 else z_off
+        hs = zc + side * k * np.sqrt(np.maximum(u2[y0:y1, x0:x1], 0))
+        lo, hi = (hs - a, hs + delta) if side > 0 else (hs - delta, hs + a)
+        msk = mask[y0:y1, x0:x1]
+        zlo, zhi = np.floor(lo[msk].min() - 2), np.ceil(hi[msk].max() + 2)
         zs = np.arange(zlo, zhi + 0.5, 0.5)
-        slab = np.minimum(zs[None, None, :] - (hf[:, :, None] - a), (hf[:, :, None] + delta) - zs[None, None, :])
+        slab = np.minimum(zs[None, None, :] - lo[:, :, None], hi[:, :, None] - zs[None, None, :])
         Fd = np.minimum(s[:, :, None], slab).astype(np.float32)
         origin = ((x0 + 0.5) / U, (y0 + 0.5) / U, zs[0])
         pieces[f"{tag}_v"], pieces[f"{tag}_f"] = mc(Fd, origin, (0.5, 0.5, 0.5))
@@ -289,27 +368,22 @@ def build(name, seg_npz, out_npz):
         decal(lab == i, 1, f"face{i}")
 
     # ---------- inner ink strokes -----------------------------------------------
-    if cfg["web"]:
-        # strokes cut the body (e.g. arm flap vs. trunk): fill the slit with a thin
-        # black web at mid-depth so the drawn line shows from the front and back
-        lab, n = ndi.label(strokes, structure=np.ones((3, 3)))
-        for i in range(1, n + 1):
-            m = lab == i
-            if m.sum() < 400:
-                continue
-            m = ndi.binary_dilation(m, structure=disk(3))
-            y0, y1, x0, x1 = bbox(m, 6)
-            s = signed_dist(m, U)[y0:y1, x0:x1]
-            half = 5.0
-            zs = np.arange(-half - 2, half + 2.5, 0.5)
-            slab = half - np.abs(zs)
-            Fw = np.minimum(s[:, :, None], slab[None, None, :]).astype(np.float32)
-            origin = ((x0 + 0.5) / U, (y0 + 0.5) / U, zs[0])
-            pieces[f"web{i}_v"], pieces[f"web{i}_f"] = mc(Fw, origin, (0.5, 0.5, 0.5))
+    # painted strokes (arm seams, top of the leg split): a thin ink decal on the
+    # body surface, ending where the body's outline ink starts
+    lab, n = ndi.label(fill, structure=np.ones((3, 3)))
+    j = 0
+    for i in range(1, n + 1):
+        m = lab == i
+        if m.sum() < 400:
+            continue
+        j += 1
+        decal(m, 1, f"{cfg['seam_name']}{j}")
+        if cfg["seam_back"]:
+            decal(m, 1, f"{cfg['seam_name']}back{j}", side=-1)
     if cfg["paint_strokes_on_flap"] and nparts >= 2:
         # the lines between legs and the back flap: paint them on the flap's front
         near_flap = ndi.distance_transform_edt(parts != 2) <= 30
-        lab, n = ndi.label(strokes, structure=np.ones((3, 3)))
+        lab, n = ndi.label(strokes_cut, structure=np.ones((3, 3)))
         for i in range(1, n + 1):
             m = lab == i
             if m.sum() < 400 or not (m & near_flap).any():
@@ -318,7 +392,7 @@ def build(name, seg_npz, out_npz):
             decal(m, 2, f"flapline{i}", a=2.0, delta=0.8)
 
     meta["pieces"] = sorted({k.rsplit("_", 1)[0] for k in pieces})
-    np.savez_compressed(out_npz, T=T1.astype(np.float32), meta=json.dumps(meta), **pieces)
+    np.savez_compressed(out_npz, T=T1.astype(np.float32), meta=json.dumps(meta), fill_mask=fill, **pieces)
     print(json.dumps(meta, indent=1))
 
 

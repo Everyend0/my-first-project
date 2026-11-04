@@ -198,13 +198,18 @@ def write_obj(path, groups, mats):
         fh.write("# never give them a collider. Delete them for a plain model.\n")
         fh.write(f"mtllib {mtl}\n")
         voff, noff = 1, 1
+        counts = {}
         for name, mat, v, f, cn in groups:
             vo = np.stack([v[:, 0], v[:, 2], -v[:, 1]], 1)
-            # drop faces that collapse once written (zero area)
-            q = np.round(vo, 6)
-            a, b, c = q[f[:, 0]], q[f[:, 1]], q[f[:, 2]]
-            keep = np.linalg.norm(np.cross(b - a, c - a), axis=1) > 1e-11
+            # positions are written with 6 decimals: weld vertices that become
+            # identical, then drop only faces that truly collapse - meshes stay closed
+            vo, inv_v = np.unique(np.round(vo, 6), axis=0, return_inverse=True)
+            f = inv_v.ravel()[f]
+            a, b, c = vo[f[:, 0]], vo[f[:, 1]], vo[f[:, 2]]
+            keep = (f[:, 0] != f[:, 1]) & (f[:, 1] != f[:, 2]) & (f[:, 0] != f[:, 2])
+            keep &= np.linalg.norm(np.cross(b - a, c - a), axis=1) > 1e-13
             f, cn = f[keep], cn[keep]
+            counts[name] = dict(verts=len(vo), tris=len(f))
             no = np.stack([cn[..., 0], cn[..., 2], -cn[..., 1]], -1).reshape(-1, 3)
             no = np.round(no / np.maximum(np.linalg.norm(no, axis=1, keepdims=True), 1e-9), 4)
             un, inv = np.unique(no, axis=0, return_inverse=True)
@@ -214,7 +219,7 @@ def write_obj(path, groups, mats):
             fh.write("".join(f"vn {x:.4f} {y:.4f} {z:.4f}\n" for x, y, z in un))
             fv, fn = f + voff, inv + noff
             fh.write("".join(f"f {a}//{d} {b}//{e} {c}//{g}\n" for (a, b, c), (d, e, g) in zip(fv, fn)))
-            voff += len(v)
+            voff += len(vo)
             noff += len(un)
     with open(os.path.join(os.path.dirname(path), mtl), "w") as fh:
         fh.write(f"# materials for {base}.obj\n")
@@ -222,6 +227,7 @@ def write_obj(path, groups, mats):
             fh.write(f"\nnewmtl {name}\n")
             for k, val in d.items():
                 fh.write(f"{k} {val}\n")
+    return counts
 
 
 # ----------------------------------------------------------------------------- main
@@ -259,8 +265,9 @@ def main():
         return np.stack([(v[:, 0] - cx) * PX, -v[:, 2] * PX, (y_floor - v[:, 1]) * PX], 1)
 
     m_yel = principled("Banana_Yellow", YELLOW, rough=0.38, coat=0.25, coat_rough=0.18, spec=0.4)
-    m_blk = principled("Ink_Black", (0.002, 0.002, 0.002), rough=0.42, coat=0.3, coat_rough=0.07, spec=0.25)
-    m_line = principled("Ink_Line_Matte", (0.003, 0.003, 0.003), rough=0.8, coat=0.0, spec=0.2)
+    # ink reads as solid black like the drawing; only small, crisp glints remain
+    m_blk = principled("Ink_Black", (0.002, 0.002, 0.002), rough=0.5, coat=0.18, coat_rough=0.06, spec=0.12)
+    m_line = principled("Ink_Line_Matte", (0.002, 0.002, 0.002), rough=0.85, coat=0.0, spec=0.05)
     m_out = outline_material()
 
     root = bpy.data.objects.new("Banana", None)
@@ -294,12 +301,20 @@ def main():
         elif piece.startswith("face"):
             mat, label = m_blk, face_names.get(piece, "Face_" + piece)
             target = 6000
-        elif piece.startswith("web"):
-            mat, label = m_line, "InkLine_ArmSeam_" + piece[3:]
-            target = 8000
-        else:
+        elif piece.startswith("armseamback"):
+            mat, label = m_line, f"InkLine_ArmSeam_{piece[11:]}_Back"
+            target = 6000
+        elif piece.startswith("armseam"):
+            mat, label = m_line, "InkLine_ArmSeam_" + piece[7:]
+            target = 6000
+        elif piece.startswith("legsplit"):
+            mat, label = m_line, "InkLine_LegSplit" + ("" if piece[8:] == "1" else "_" + piece[8:])
+            target = 6000
+        elif piece.startswith("flapline"):
             mat, label = m_line, "InkLine_FlapSeam_" + piece[8:]
             target = 8000
+        else:
+            raise ValueError("unknown piece " + piece)
         ob = make_mesh(label, v, f, mat)
         ob["sharp_split"] = True
         decimate(ob, min(1.0, target / max(len(f), 1)))
@@ -326,10 +341,10 @@ def main():
         mats = {
             "Banana_Yellow": {"Ka": "0 0 0", "Kd": "0.9961 0.9451 0.0392", "Ks": "0.35 0.35 0.35",
                               "Ns": "180", "d": "1", "illum": "2", "Pr": "0.38", "Pc": "0.25", "Pcr": "0.18"},
-            "Ink_Black": {"Ka": "0 0 0", "Kd": "0.0020 0.0020 0.0020", "Ks": "0.4 0.4 0.4",
-                          "Ns": "220", "d": "1", "illum": "2", "Pr": "0.42", "Pc": "0.30", "Pcr": "0.07"},
-            "Ink_Line_Matte": {"Ka": "0 0 0", "Kd": "0.0030 0.0030 0.0030", "Ks": "0.05 0.05 0.05",
-                               "Ns": "20", "d": "1", "illum": "2", "Pr": "0.8"},
+            "Ink_Black": {"Ka": "0 0 0", "Kd": "0.0020 0.0020 0.0020", "Ks": "0.25 0.25 0.25",
+                          "Ns": "220", "d": "1", "illum": "2", "Pr": "0.5", "Pc": "0.18", "Pcr": "0.06"},
+            "Ink_Line_Matte": {"Ka": "0 0 0", "Kd": "0.0020 0.0020 0.0020", "Ks": "0.02 0.02 0.02",
+                               "Ns": "10", "d": "1", "illum": "2", "Pr": "0.85"},
             "Outline_Ink": {"Ka": "0 0 0", "Kd": "0 0 0", "Ks": "0 0 0", "Ns": "1", "Ke": "0 0 0",
                             "d": "1", "illum": "0"},
         }
@@ -339,11 +354,10 @@ def main():
             rows.append((ob.name, ob.data.materials[0].name, v, f, corner_normals(ob)))
         # main body first, outline last
         rows.sort(key=lambda r: (r[0].startswith("Outline"), not r[0].startswith("Banana_Body"), r[0]))
-        write_obj(os.path.join(out, f"{name}.obj"), rows, mats)
-        stats = {r[0]: dict(verts=len(r[2]), tris=len(r[3])) for r in rows}
+        stats = write_obj(os.path.join(out, f"{name}.obj"), rows, mats)
         json.dump(dict(height_m=round(height_m, 4), objects=stats, meta=meta),
                   open(os.path.join(out, f"{name}_model_info.json"), "w"), indent=1)
-        print("exported", sum(len(r[3]) for r in rows), "triangles")
+        print("exported", sum(c["tris"] for c in stats.values()), "triangles")
 
     # ---- studio
     m_bd = principled("Backdrop", BACKDROP, rough=0.85, spec=0.3)

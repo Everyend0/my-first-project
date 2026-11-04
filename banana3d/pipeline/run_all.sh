@@ -20,4 +20,8 @@ for n in $NAMES; do
     "output/$n/${n}_overlay_check.png" | tee "output/$n/${n}_fidelity.json"
   python3 pipeline/sheet.py "$n"
 done
+# Unity colliders are fitted to the exported OBJs of both bananas
+if [ -f output/banana_legs/banana_legs.obj ] && [ -f output/banana_arms/banana_arms.obj ]; then
+  python3 pipeline/colliders.py
+fi
 echo "=== done $(date +%T)"
