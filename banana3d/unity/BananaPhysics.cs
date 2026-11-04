@@ -9,7 +9,7 @@
 //  * Compound CapsuleColliders, one per limb. A non-convex MeshCollider on a dynamic
 //    Rigidbody is silently ignored, and a convex one would fill the gap between the legs.
 //    Radii include most of the thick ink outline, so contacts happen at the visible line.
-//    The legs banana's back peel flap gets a BoxCollider from its mesh bounds.
+//    The legs banana's peel piece between the legs gets a BoxCollider from its mesh bounds.
 //  * Every other collider under the model is removed (or disabled, inside a prefab) - in
 //    particular never put a MeshCollider on "Outline_Ink_*": that toon-outline shell is
 //    intentionally inside-out (inverted normals), so contacts would push objects INTO it.
@@ -128,13 +128,13 @@ public class BananaPhysics : MonoBehaviour
         new Cap(0.09863f, 0.0269f, 0.0f, 0.06841f, 0.04605f, 0.0f, 0.02731f),
     };
     // measured on the exported OBJ files
-    const float LegsBodyMeshHeight = 1.32825f;   // y-size of the Banana_Body mesh
+    const float LegsBodyMeshHeight = 1.32756f;   // y-size of the Banana_Body mesh
     const float ArmsBodyMeshHeight = 1.525f;
     const float LegsMouthCenterX = -0.027f;     // x of the Face_Mouth mesh centre
     const float ArmsMouthCenterX = 0.073f;
     const float OutlineWidth = 0.03192f;            // ink line counted as solid (metres)
-    static readonly Vector3 LegsCenterOfMass = new Vector3(-0.06205f, 0.68532f, -0.00087f);   // volume centre, OBJ space
-    static readonly Vector3 ArmsCenterOfMass = new Vector3(0.07492f, 0.78232f, -0.0f);
+    static readonly Vector3 LegsCenterOfMass = new Vector3(-0.06221f, 0.68541f, 0.0f);   // volume centre, OBJ space
+    static readonly Vector3 ArmsCenterOfMass = new Vector3(0.07493f, 0.7823f, -0.0f);
 
     void Reset() { Build(); }
 
@@ -153,7 +153,7 @@ public class BananaPhysics : MonoBehaviour
     Banana Detect()
     {
         if (banana != Banana.Auto) return banana;
-        if (FindMesh("BackPeelFlap") != null || FindMesh("LegSplit") != null) return Banana.Legs;
+        if (FindMesh("LegPeel") != null || FindMesh("LegSplit") != null) return Banana.Legs;
         if (FindMesh("ArmSeam") != null) return Banana.Arms;
         bool arms = name.ToLowerInvariant().Contains("arm");
         Debug.LogWarning("BananaPhysics: could not recognise the model from its parts, guessing " +
@@ -226,8 +226,8 @@ public class BananaPhysics : MonoBehaviour
             cc.height = len + 2f * cc.radius;
         }
 
-        // the legs banana's back peel flap: a box around its mesh (+ its ink line)
-        MeshFilter flap = id == Banana.Legs ? FindMesh("Banana_BackPeelFlap") : null;
+        // the legs banana's peel piece between the legs: a box around its mesh (+ its ink line)
+        MeshFilter flap = id == Banana.Legs ? FindMesh("Banana_LegPeel") : null;
         Transform fb = holder.Find("Flap_Box");
         if (flap != null)
         {

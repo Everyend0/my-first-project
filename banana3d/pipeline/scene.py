@@ -295,10 +295,10 @@ def main():
             continue
         main = piece.startswith("part1")
         if "yellow" in piece:
-            mat, label = m_yel, "Banana_Body" if main else "Banana_BackPeelFlap"
+            mat, label = m_yel, "Banana_Body" if main else "Banana_LegPeel"
             target = int(os.environ.get("BANANA_BODY_TRIS", "170000")) if main else 30000
         elif "cap" in piece:
-            mat, label = m_blk, "Banana_Tips_Black" if main else "BackPeelFlap_Tip_Black"
+            mat, label = m_blk, "Banana_Tips_Black" if main else "LegPeel_Tip_Black"
             target = 16000
         elif piece.startswith("face"):
             mat, label = m_line, face_names.get(piece, "Face_" + piece)
@@ -310,10 +310,15 @@ def main():
             mat, label = m_line, "InkLine_ArmSeam_" + piece[7:]
             target = 6000
         elif piece.startswith("legsplit"):
-            mat, label = m_line, "InkLine_LegSplit" + ("" if piece[8:] == "1" else "_" + piece[8:])
+            n = piece[8:]
+            back = n.startswith("back")
+            n = n[4:] if back else n
+            mat, label = m_line, "InkLine_LegSplit" + ("" if n == "1" else "_" + n) + ("_Back" if back else "")
             target = 6000
         elif piece.startswith("flapline"):
-            mat, label = m_line, "InkLine_FlapSeam_" + piece[8:]
+            n = piece[8:]
+            label = f"InkLine_FlapSeam_{n[:-4]}_Back" if n.endswith("back") else "InkLine_FlapSeam_" + n
+            mat = m_line
             target = 8000
         else:
             raise ValueError("unknown piece " + piece)
@@ -330,7 +335,7 @@ def main():
         # the shell is built (build_mesh.hull_shell) as the offset surface at the
         # drawn line width; here it is only thinned and turned inside-out
         main = piece.startswith("part1")
-        hull = make_mesh("Outline_Ink_" + ("Body" if main else "BackPeelFlap"), v, f[:, ::-1].copy(), m_out)
+        hull = make_mesh("Outline_Ink_" + ("Body" if main else "LegPeel"), v, f[:, ::-1].copy(), m_out)
         decimate(hull, min(1.0, (130000 if main else 30000) / len(f)))
         hull.parent = root
         for attr in ("visible_shadow", "visible_diffuse", "visible_glossy", "visible_transmission",

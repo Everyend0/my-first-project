@@ -30,10 +30,13 @@ from skimage import measure
 #   the surface instead of being cut into it ("all" = every stroke, "spike" = the part
 #   of a stroke farther than spike_d (2x px) from the back flap).  Cutting them made
 #   deep grooves that looked like cracks and torn flakes from the diagonal views.
+# flap_mode (piece between the legs): "mid" = sits in the middle between the legs, so
+#   the back view shows the same split line (Λ + the line going up) as the front;
+#   "behind" = a separate peel flap hanging behind the legs (rounded flap from behind).
 CFG = {
-    "banana_legs": dict(k=0.9, flap_k=0.42, flap_ext=56, fill_strokes="spike", spike_d=40,
-                        seam_name="legsplit", seam_back=False, paint_strokes_on_flap=True),
-    "banana_arms": dict(k=0.9, flap_k=0.42, flap_ext=56, fill_strokes="all", spike_d=0,
+    "banana_legs": dict(k=0.9, flap_k=0.42, flap_ext=56, flap_mode="mid", fill_strokes="spike", spike_d=40,
+                        seam_name="legsplit", seam_back=True, paint_strokes_on_flap=True),
+    "banana_arms": dict(k=0.9, flap_k=0.42, flap_ext=56, flap_mode="mid", fill_strokes="all", spike_d=0,
                         seam_name="armseam", seam_back=True, paint_strokes_on_flap=False),
 }
 
@@ -407,7 +410,10 @@ def build(name, seg_npz, out_npz):
         dq = ndi.distance_transform_edt(parts != q)
         sel = edgeI & (parts > 0) & (parts != q)
         D_other[sel] = np.minimum(D_other[sel], dq[sel])
-    T_inner = np.clip((D_other - 1.0) / U, 0.5 * medT, medT)
+    # the shells of both parts overlap inside the line, but each stays ~2.5 px clear of
+    # the other part's surface (touching made shell and yellow interleave into speckles
+    # when seen at an angle)
+    T_inner = np.clip((D_other - 1.0) / U - 1.5, 0.3 * medT, medT)
     T_edge = np.where(good, D_bg / U, T_inner)
     _, ind = ndi.distance_transform_edt(~edgeI, return_indices=True)
     T2 = T_edge[ind[0], ind[1]]
@@ -424,6 +430,10 @@ def build(name, seg_npz, out_npz):
         Th = T1
         if p == 1:
             k, z_off, region = cfg["k"], 0.0, reg
+        elif cfg["flap_mode"] == "mid":
+            # the piece between the legs, centred in depth like the legs' inner
+            # edges: front and back look the same (drawn split line on both sides)
+            k, z_off, region = cfg["flap_k"], 0.0, reg
         else:
             # back peel flap seen between the legs: a separate piece hanging BEHIND
             # the body; its hidden part tucks under the legs
@@ -445,7 +455,7 @@ def build(name, seg_npz, out_npz):
         u2 = inflate_field(region, U, K=Kd)
         print(f"  part {p}: poisson {region.sum()} px ({time.time() - t:.1f}s)", flush=True)
         hmax = k * np.sqrt(max(u2.max(), 0))
-        if p != 1:
+        if p != 1 and cfg["flap_mode"] != "mid":
             u_m, k_m = fields[1][0], fields[1][1]
             z_off = flap_depth(region, u2, k, u_m, k_m, Tf2, U)
             zr = z_off[region]
@@ -552,7 +562,9 @@ def build(name, seg_npz, out_npz):
         decal(m, 1, f"{cfg['seam_name']}{j}", delta=1.4, full=True)
         if cfg["seam_back"]:
             decal(m, 1, f"{cfg['seam_name']}back{j}", delta=1.4, side=-1, full=True)
-    if cfg["paint_strokes_on_flap"] and nparts >= 2:
+    if cfg["paint_strokes_on_flap"] and nparts >= 2 and cfg["flap_mode"] != "mid":
+        # (only needed when the flap hangs behind the legs: then the flap's front shows
+        # through the cut lines; with the flap in the middle the outline fills them)
         # the lines between legs and the back flap: paint them on the flap's front
         near_flap = ndi.distance_transform_edt(parts != 2) <= 30
         lab, n = ndi.label(strokes_cut, structure=np.ones((3, 3)))

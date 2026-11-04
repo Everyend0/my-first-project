@@ -1,0 +1,76 @@
+{
+ "height_m": 1.49,
+ "objects": {
+  "Banana_Body": {
+   "verts": 85002,
+   "tris": 170000
+  },
+  "Banana_LegPeel": {
+   "verts": 4694,
+   "tris": 9384
+  },
+  "Banana_Tips_Black": {
+   "verts": 8004,
+   "tris": 15999
+  },
+  "Face_Eye_1": {
+   "verts": 3002,
+   "tris": 6000
+  },
+  "Face_Eye_2": {
+   "verts": 3002,
+   "tris": 6000
+  },
+  "Face_Mouth": {
+   "verts": 3002,
+   "tris": 6000
+  },
+  "InkLine_LegSplit": {
+   "verts": 3002,
+   "tris": 6000
+  },
+  "InkLine_LegSplit_Back": {
+   "verts": 3002,
+   "tris": 6000
+  },
+  "Outline_Ink_Body": {
+   "verts": 65002,
+   "tris": 130000
+  },
+  "Outline_Ink_LegPeel": {
+   "verts": 15002,
+   "tris": 30000
+  }
+ },
+ "meta": {
+  "parts": [
+   {
+    "part": 1,
+    "k": 0.9,
+    "z_off": 0.0,
+    "hmax": 72.93,
+    "area_px": 129205
+   },
+   {
+    "part": 2,
+    "k": 0.42,
+    "z_off": 0.0,
+    "hmax": 5.86,
+    "area_px": 1498
+   }
+  ],
+  "outline_median_px": 16.80029761641144,
+  "pieces": [
+   "face1",
+   "face2",
+   "face3",
+   "legsplit1",
+   "legsplitback1",
+   "part1_cap",
+   "part1_hull",
+   "part1_yellow",
+   "part2_hull",
+   "part2_yellow"
+  ]
+ }
+}

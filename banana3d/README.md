@@ -37,10 +37,9 @@ output/<이름>/
 | `Banana_Body` | `Banana_Yellow` | 노란 몸통 (그림의 테두리 안쪽 모양 그대로) |
 | `Banana_Tips_Black` | `Ink_Black` | 꼭지·발끝·팔끝 검은 부분 (살짝 광택) |
 | `Face_Eye_1`, `Face_Eye_2`, `Face_Mouth` | `Ink_Line_Matte` | 얼굴 (그림에서 그대로 따낸 모양, 표면에 살짝 붙은 무광 잉크) |
-| `Banana_BackPeelFlap` (다리 바나나만) | `Banana_Yellow` | 다리 사이로 보이는 뒤쪽 껍질 조각. 몸 뒤에 붙어 있어서 뒤에서 보면 둥근 껍질 조각 + 테두리로 보입니다 |
+| `Banana_LegPeel` (다리 바나나만) | `Banana_Yellow` | 다리 사이의 껍질 조각. 다리 한가운데 깊이에 있어서 앞에서 봐도 뒤에서 봐도 그림과 같은 모양(갈라지는 선 + 아래 둥근 선)으로 보입니다 |
 | `InkLine_ArmSeam_N` / `_Back` (팔 바나나) | `Ink_Line_Matte` | 팔과 몸 사이 선 (앞·뒤 표면에 그린 선) |
-| `InkLine_LegSplit` (다리 바나나) | `Ink_Line_Matte` | 다리 갈라지는 선의 윗부분 |
-| `InkLine_FlapSeam_N` (다리 바나나) | `Ink_Line_Matte` | 다리와 뒤쪽 껍질 사이 선 |
+| `InkLine_LegSplit` / `_Back` (다리 바나나) | `Ink_Line_Matte` | 다리 갈라지는 선의 윗부분 (앞·뒤 표면 모두) |
 | `Outline_Ink_*` | `Outline_Ink` | **만화 외곽선 껍데기** (아래 설명) |
 
 ### 외곽선(`Outline_Ink_*`) 사용법
@@ -67,11 +66,11 @@ output/<이름>/
 
 ## Unity 물리 (충돌)
 
-`unity/BananaPhysics.cs` 를 모델 루트에 붙이면 끝입니다. 다리/팔 바나나는 모델 안의 오브젝트 이름(`Banana_BackPeelFlap`, `InkLine_ArmSeam_*`)으로 알아서 구분합니다.
+`unity/BananaPhysics.cs` 를 모델 루트에 붙이면 끝입니다. 다리/팔 바나나는 모델 안의 오브젝트 이름(`Banana_LegPeel`, `InkLine_ArmSeam_*`)으로 알아서 구분합니다.
 
 - 팔·다리마다 캡슐 콜라이더를 만듭니다. 오목한 모양이라 MeshCollider는 움직이는 Rigidbody에서 무시되고, Convex로 하면 다리 사이가 막히기 때문입니다.
 - 캡슐 반지름에 검은 외곽선 두께 대부분을 포함해서, 물체가 외곽선에 닿는 순간 부딪힙니다 (선 안으로 파묻히지 않음). 바닥에 세우면 외곽선 아래쪽이 바닥에 닿습니다.
-- 다리 바나나의 뒤쪽 껍질 조각은 메쉬 크기에 맞춘 BoxCollider 하나로 처리합니다.
+- 다리 바나나의 다리 사이 껍질 조각은 메쉬 크기에 맞춘 BoxCollider 하나로 처리합니다.
 - 임포트 배율과 Unity의 OBJ X축 반전은 `Banana_Body`·`Face_Mouth` 메쉬 크기로 자동 보정합니다. 메쉬 Read/Write 설정은 필요 없습니다.
 - 루트에 Rigidbody 하나를 둡니다 (Continuous Speculative). 무게중심은 실제 모델 부피 중심으로 맞춰 둡니다.
 - 발바닥이 둥근 바나나라 그냥 두면 실제처럼 넘어집니다. 캐릭터로 세워 두려면 `keepUpright`를 켜세요 (X/Z 회전 고정).
