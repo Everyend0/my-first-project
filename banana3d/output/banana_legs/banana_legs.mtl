@@ -1,0 +1,41 @@
+# materials for banana_legs.obj
+
+newmtl Banana_Yellow
+Ka 0 0 0
+Kd 0.9961 0.9451 0.0392
+Ks 0.35 0.35 0.35
+Ns 180
+d 1
+illum 2
+Pr 0.38
+Pc 0.25
+Pcr 0.18
+
+newmtl Ink_Black
+Ka 0 0 0
+Kd 0.0020 0.0020 0.0020
+Ks 0.2 0.2 0.2
+Ns 220
+d 1
+illum 2
+Pr 0.55
+Pc 0.15
+Pcr 0.06
+
+newmtl Ink_Line_Matte
+Ka 0 0 0
+Kd 0.0020 0.0020 0.0020
+Ks 0 0 0
+Ns 1
+d 1
+illum 1
+Pr 0.9
+
+newmtl Outline_Ink
+Ka 0 0 0
+Kd 0 0 0
+Ks 0 0 0
+Ns 1
+Ke 0 0 0
+d 1
+illum 0
