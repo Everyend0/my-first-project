@@ -9,7 +9,7 @@
 //  * Compound CapsuleColliders, one per limb. A non-convex MeshCollider on a dynamic
 //    Rigidbody is silently ignored, and a convex one would fill the gap between the legs.
 //    Radii include most of the thick ink outline, so contacts happen at the visible line.
-//    The legs banana's peel piece between the legs gets a BoxCollider from its mesh bounds.
+//    The legs banana's copied front and back legs get capsules along their bend too.
 //  * Every other collider under the model is removed (or disabled, inside a prefab) - in
 //    particular never put a MeshCollider on "Outline_Ink_*": that toon-outline shell is
 //    intentionally inside-out (inverted normals), so contacts would push objects INTO it.
@@ -43,6 +43,8 @@ public class BananaPhysics : MonoBehaviour
     public CollisionDetectionMode collisionDetection = CollisionDetectionMode.ContinuousSpeculative;
     [Tooltip("Freeze rotation around X and Z so the banana stays standing (typical for a character).")]
     public bool keepUpright = false;
+    [Tooltip("Draw the collider capsules and the centre of mass in the Scene view when selected.")]
+    public bool drawGizmos = true;
 
     struct Cap
     {
@@ -53,39 +55,47 @@ public class BananaPhysics : MonoBehaviour
 
     // capsule end points + radius in OBJ space (metres, +Y up, character faces +Z)
     static readonly Cap[] Legs = {
-        new Cap(-0.041f, 0.945f, 0.0f, -0.03977f, 1.06156f, 0.0f, 0.20378f),
-        new Cap(-0.03977f, 1.06156f, 0.0f, -0.039f, 1.135f, 0.0f, 0.13033f),
-        new Cap(-0.039f, 1.135f, 0.0f, -0.007f, 1.331f, 0.0f, 0.08119f),
+        new Cap(-0.047f, 0.911f, 0.0f, -0.11288f, 0.85244f, 0.0f, 0.18308f),
+        new Cap(-0.11288f, 0.85244f, 0.0f, -0.137f, 0.831f, 0.0f, 0.1508f),
+        new Cap(-0.137f, 0.831f, 0.0f, -0.1758f, 0.71847f, 0.0f, 0.14846f),
+        new Cap(-0.1758f, 0.71847f, 0.0f, -0.177f, 0.715f, 0.0f, 0.14479f),
+        new Cap(-0.177f, 0.715f, 0.0f, -0.42604f, 0.41018f, 0.0f, 0.13552f),
+        new Cap(-0.42604f, 0.41018f, 0.0f, -0.427f, 0.409f, 0.0f, 0.134f),
+        new Cap(-0.42778f, 0.40785f, 0.0f, -0.57365f, 0.19298f, 0.0f, 0.13539f),
+        new Cap(-0.42778f, 0.40785f, 0.0f, -0.427f, 0.409f, 0.0f, 0.134f),
+        new Cap(-0.57365f, 0.19298f, 0.0f, -0.575f, 0.191f, 0.0f, 0.13299f),
+        new Cap(-0.575f, 0.191f, 0.0f, -0.6467f, 0.12256f, 0.0f, 0.1075f),
+        new Cap(-0.6467f, 0.12256f, 0.0f, -0.68166f, 0.08919f, 0.0f, 0.05917f),
+        new Cap(0.62287f, 0.21532f, 0.0f, 0.203f, 0.569f, 0.0f, 0.12188f),
+        new Cap(0.62287f, 0.21532f, 0.0f, 0.66457f, 0.1802f, 0.0f, 0.06736f),
+        new Cap(0.203f, 0.569f, 0.0f, 0.097f, 0.715f, 0.0f, 0.13101f),
+        new Cap(0.09592f, 0.71808f, 0.0f, 0.059f, 0.823f, 0.0f, 0.14289f),
+        new Cap(0.09592f, 0.71808f, 0.0f, 0.097f, 0.715f, 0.0f, 0.13962f),
+        new Cap(0.03658f, 0.84234f, 0.0f, -0.043f, 0.911f, 0.0f, 0.17456f),
+        new Cap(0.03658f, 0.84234f, 0.0f, 0.059f, 0.823f, 0.0f, 0.14495f),
+        new Cap(-0.045f, 0.913f, 0.0f, -0.04107f, 1.04932f, 0.0f, 0.21297f),
+        new Cap(-0.04107f, 1.04932f, 0.0f, -0.039f, 1.121f, 0.0f, 0.14126f),
+        new Cap(-0.039f, 1.121f, 0.0f, -0.007f, 1.331f, 0.0f, 0.08254f),
         new Cap(-0.007f, 1.331f, 0.0f, -0.01414f, 1.39705f, 0.0f, 0.07992f),
         new Cap(-0.01414f, 1.39705f, 0.0f, -0.015f, 1.405f, 0.0f, 0.07192f),
         new Cap(-0.015f, 1.405f, 0.0f, -0.04139f, 1.42846f, 0.0f, 0.05484f),
         new Cap(-0.04139f, 1.42846f, 0.0f, -0.05324f, 1.43899f, 0.0f, 0.03899f),
-        new Cap(0.62287f, 0.21532f, 0.0f, 0.203f, 0.569f, 0.0f, 0.12188f),
-        new Cap(0.62287f, 0.21532f, 0.0f, 0.66457f, 0.1802f, 0.0f, 0.06736f),
-        new Cap(0.203f, 0.569f, 0.0f, 0.111f, 0.717f, 0.0f, 0.12858f),
-        new Cap(0.111f, 0.717f, 0.0f, 0.067f, 0.849f, 0.0f, 0.12831f),
-        new Cap(0.04084f, 0.8722f, 0.0f, -0.039f, 0.943f, 0.0f, 0.16538f),
-        new Cap(0.04084f, 0.8722f, 0.0f, 0.067f, 0.849f, 0.0f, 0.13041f),
-        new Cap(-0.6467f, 0.12256f, 0.0f, -0.575f, 0.191f, 0.0f, 0.1075f),
-        new Cap(-0.6467f, 0.12256f, 0.0f, -0.68166f, 0.08919f, 0.0f, 0.05917f),
-        new Cap(-0.57365f, 0.19298f, 0.0f, -0.42778f, 0.40785f, 0.0f, 0.13539f),
-        new Cap(-0.57365f, 0.19298f, 0.0f, -0.575f, 0.191f, 0.0f, 0.13299f),
-        new Cap(-0.42778f, 0.40785f, 0.0f, -0.427f, 0.409f, 0.0f, 0.134f),
-        new Cap(-0.42624f, 0.4099f, 0.0f, -0.251f, 0.619f, 0.0f, 0.13518f),
-        new Cap(-0.42624f, 0.4099f, 0.0f, -0.427f, 0.409f, 0.0f, 0.134f),
-        new Cap(-0.251f, 0.619f, 0.0f, -0.183f, 0.735f, 0.0f, 0.13728f),
-        new Cap(-0.183f, 0.735f, 0.0f, -0.139f, 0.869f, 0.0f, 0.13632f),
-        new Cap(-0.11011f, 0.89127f, 0.0f, -0.043f, 0.943f, 0.0f, 0.17708f),
-        new Cap(-0.11011f, 0.89127f, 0.0f, -0.139f, 0.869f, 0.0f, 0.1406f),
-        new Cap(-0.23712f, 1.009f, 0.0f, -0.2365f, 1.0665f, 0.0f, 0.02688f),
-        new Cap(-0.2345f, 1.0685f, 0.0f, -0.2335f, 1.0755f, 0.0f, 0.02688f),
-        new Cap(-0.23139f, 1.0872f, 0.0f, -0.23139f, 1.0872f, 0.0f, 0.02688f),
-        new Cap(-0.22939f, 1.0972f, 0.0f, -0.22939f, 1.0972f, 0.0f, 0.02688f),
-        new Cap(-0.2285f, 1.1025f, 0.0f, -0.2285f, 1.1025f, 0.0f, 0.02688f),
+        new Cap(-0.0553f, 0.80808f, -0.0f, -0.0553f, 0.72985f, -0.09702f, 0.10581f),
+        new Cap(-0.0553f, 0.72985f, -0.09702f, -0.0553f, 0.63462f, -0.18673f, 0.11755f),
+        new Cap(-0.0553f, 0.63462f, -0.18673f, -0.0553f, 0.52764f, -0.27059f, 0.11638f),
+        new Cap(-0.0553f, 0.52764f, -0.27059f, -0.0553f, 0.42274f, -0.35947f, 0.11483f),
+        new Cap(-0.0553f, 0.42274f, -0.35947f, -0.0553f, 0.31204f, -0.43435f, 0.11535f),
+        new Cap(-0.0553f, 0.31204f, -0.43435f, -0.0553f, 0.20278f, -0.51271f, 0.11432f),
+        new Cap(-0.0553f, 0.20278f, -0.51271f, -0.0553f, 0.11224f, -0.59847f, 0.09629f),
+        new Cap(-0.0553f, 0.80808f, 0.0f, -0.0553f, 0.72985f, 0.09702f, 0.10581f),
+        new Cap(-0.0553f, 0.72985f, 0.09702f, -0.0553f, 0.63462f, 0.18673f, 0.11755f),
+        new Cap(-0.0553f, 0.63462f, 0.18673f, -0.0553f, 0.52764f, 0.27059f, 0.11638f),
+        new Cap(-0.0553f, 0.52764f, 0.27059f, -0.0553f, 0.42274f, 0.35947f, 0.11483f),
+        new Cap(-0.0553f, 0.42274f, 0.35947f, -0.0553f, 0.31204f, 0.43435f, 0.11535f),
+        new Cap(-0.0553f, 0.31204f, 0.43435f, -0.0553f, 0.20278f, 0.51271f, 0.11432f),
+        new Cap(-0.0553f, 0.20278f, 0.51271f, -0.0553f, 0.11224f, 0.59847f, 0.09629f),
         new Cap(0.0025f, 1.4645f, 0.0f, 0.0025f, 1.4645f, 0.0f, 0.02688f),
         new Cap(0.017f, 1.46112f, 0.0f, 0.0345f, 1.4505f, 0.0f, 0.02688f),
-        new Cap(0.00117f, 0.61505f, 0.0f, -0.049f, 0.60688f, 0.0f, 0.02688f),
-        new Cap(-0.053f, 0.60688f, 0.0f, -0.0825f, 0.6115f, 0.0f, 0.02688f),
         new Cap(-0.56483f, 0.06505f, 0.0f, -0.56483f, 0.06505f, 0.0f, 0.02688f),
         new Cap(-0.57083f, 0.06305f, 0.0f, -0.6135f, 0.0375f, 0.0f, 0.02688f),
         new Cap(-0.6175f, 0.0375f, 0.0f, -0.6565f, 0.0295f, 0.0f, 0.02688f),
@@ -133,7 +143,7 @@ public class BananaPhysics : MonoBehaviour
     const float LegsMouthCenterX = -0.027f;     // x of the Face_Mouth mesh centre
     const float ArmsMouthCenterX = 0.073f;
     const float OutlineWidth = 0.03192f;            // ink line counted as solid (metres)
-    static readonly Vector3 LegsCenterOfMass = new Vector3(-0.06221f, 0.68541f, 0.0f);   // volume centre, OBJ space
+    static readonly Vector3 LegsCenterOfMass = new Vector3(-0.05916f, 0.62353f, -0.0f);   // volume centre, OBJ space
     static readonly Vector3 ArmsCenterOfMass = new Vector3(0.07493f, 0.7823f, -0.0f);
 
     void Reset() { Build(); }
@@ -150,15 +160,75 @@ public class BananaPhysics : MonoBehaviour
         return null;
     }
 
-    Banana Detect()
+    Banana Detect(bool log = true)
     {
         if (banana != Banana.Auto) return banana;
         if (FindMesh("LegPeel") != null || FindMesh("LegSplit") != null) return Banana.Legs;
         if (FindMesh("ArmSeam") != null) return Banana.Arms;
         bool arms = name.ToLowerInvariant().Contains("arm");
-        Debug.LogWarning("BananaPhysics: could not recognise the model from its parts, guessing " +
-                         (arms ? "Arms" : "Legs") + " from the name. Set 'banana' explicitly.", this);
+        if (log)
+            Debug.LogWarning("BananaPhysics: could not recognise the model from its parts, guessing " +
+                             (arms ? "Arms" : "Legs") + " from the name. Set 'banana' explicitly.", this);
         return arms ? Banana.Arms : Banana.Legs;
+    }
+
+    // ---- read-only status for the inspector (BananaPhysicsEditor)
+    public Banana DetectedBanana => Detect(false);
+    public Transform CollidersRoot => transform.Find("Colliders");
+
+    /// colliders under the model that this component did not make (e.g. importer MeshColliders)
+    public int ForeignColliderCount
+    {
+        get
+        {
+            Transform holder = CollidersRoot;
+            int n = 0;
+            foreach (Collider c in GetComponentsInChildren<Collider>(true))
+                if (c.enabled && (holder == null || !c.transform.IsChildOf(holder))) n++;
+            return n;
+        }
+    }
+
+    public bool HasNonUniformScale
+    {
+        get
+        {
+            Vector3 ls = transform.lossyScale;
+            return Mathf.Abs(ls.x - ls.y) > 1e-3f || Mathf.Abs(ls.y - ls.z) > 1e-3f;
+        }
+    }
+
+    // capsules + centre of mass in the Scene view while the banana is selected
+    void OnDrawGizmosSelected()
+    {
+        if (!drawGizmos) return;
+        Transform holder = CollidersRoot;
+        if (holder != null)
+        {
+            Gizmos.color = new Color(0.1f, 0.85f, 1f, 0.9f);
+            foreach (CapsuleCollider cc in holder.GetComponentsInChildren<CapsuleCollider>(false))
+                DrawWireCapsule(cc);
+        }
+        Rigidbody rb = GetComponent<Rigidbody>();
+        if (rb != null)
+        {
+            Gizmos.matrix = Matrix4x4.identity;
+            Gizmos.color = new Color(1f, 0.3f, 0.1f, 1f);
+            Gizmos.DrawWireSphere(rb.worldCenterOfMass, 0.03f * transform.lossyScale.y);
+        }
+    }
+
+    static void DrawWireCapsule(CapsuleCollider cc)
+    {
+        Gizmos.matrix = cc.transform.localToWorldMatrix;
+        float r = cc.radius, half = Mathf.Max(cc.height * 0.5f - r, 0f);
+        Vector3 up = Vector3.up * half, c = cc.center;
+        Gizmos.DrawWireSphere(c + up, r);
+        Gizmos.DrawWireSphere(c - up, r);
+        Gizmos.DrawLine(c + up + Vector3.right * r, c - up + Vector3.right * r);
+        Gizmos.DrawLine(c + up - Vector3.right * r, c - up - Vector3.right * r);
+        Gizmos.DrawLine(c + up + Vector3.forward * r, c - up + Vector3.forward * r);
+        Gizmos.DrawLine(c + up - Vector3.forward * r, c - up - Vector3.forward * r);
     }
 
     [ContextMenu("Build Colliders")]
@@ -226,26 +296,9 @@ public class BananaPhysics : MonoBehaviour
             cc.height = len + 2f * cc.radius;
         }
 
-        // the legs banana's peel piece between the legs: a box around its mesh (+ its ink line)
-        MeshFilter flap = id == Banana.Legs ? FindMesh("Banana_LegPeel") : null;
+        // (older builds put a box on the piece between the legs; it is now capsules)
         Transform fb = holder.Find("Flap_Box");
-        if (flap != null)
-        {
-            Bounds fbnd = flap.sharedMesh.bounds;
-            Matrix4x4 m = transform.worldToLocalMatrix * flap.transform.localToWorldMatrix;
-            if (fb == null) fb = Child(holder, "Flap_Box");
-            Record(fb);
-            fb.localPosition = m.MultiplyPoint3x4(fbnd.center);
-            fb.localRotation = m.rotation;
-            fb.localScale = Vector3.one;
-            BoxCollider bc = fb.GetComponent<BoxCollider>();
-            if (bc == null) bc = AddComp<BoxCollider>(fb.gameObject);
-            Record(bc);
-            bc.enabled = true;
-            bc.center = Vector3.zero;
-            bc.size = Vector3.Scale(fbnd.size, m.lossyScale) + Vector3.one * (2f * OutlineWidth * s * k);
-        }
-        else if (fb != null) SetActive(fb.gameObject, false);
+        if (fb != null) SetActive(fb.gameObject, false);
 
         // leftovers from an older build: switch off instead of deleting (prefab-safe)
         for (Transform t; (t = holder.Find("Capsule_" + n)) != null; n++) SetActive(t.gameObject, false);

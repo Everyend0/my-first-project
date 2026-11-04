@@ -6,7 +6,7 @@ hull would fill the gap between the legs.  So each limb gets its own capsule,
 fitted along the medial axis (skeleton) of the drawn body region; the radius is
 the local half-width of the drawing plus most of the ink outline, so things touch
 the visible black line instead of sinking into it.  The small peel piece between the legs of the
-legs banana gets a box from its mesh bounds at runtime (see BananaPhysics.cs).
+legs banana (its back peel strip) gets capsules along the strip's centreline.
 
 Writes output/<name>/<name>_colliders.json and unity/BananaPhysics.cs (both bananas).
 """
@@ -172,6 +172,14 @@ def capsules_for(name):
                 for q0, q1, rt in tips:
                     if np.linalg.norm(q1 - q0) > 0.5:
                         caps.append(dict(part=p, a=(q0[1], q0[0]), b=(q1[1], q1[0]), r=float(rt), z=0.0))
+    # the legs banana's back peel strip: capsules along its bending centreline
+    for sp in meta.get("strips", [meta["strip"]] if "strip" in meta else []):
+        # (strip points are pixel coordinates; capsule points here use pixel indices)
+        P3 = [(q[0] - 0.5, q[1] - 0.5, q[2]) for q in sp["points"]]
+        rad = sp["radius"]
+        for i in range(len(P3) - 1):
+            r = 0.5 * (rad[i] + rad[i + 1]) + ink
+            caps.append(dict(part=2, a=tuple(P3[i]), b=tuple(P3[i + 1]), r=float(r), z=0.0))
     # close coverage gaps along the visible outer edge (soles, tips): wherever the
     # outline's outer edge lies > 3 px outside every capsule, add a small capsule that
     # touches that edge from inside - feet then rest on y = 0 like the drawing
@@ -190,7 +198,7 @@ def capsules_for(name):
     def outside_by(q):
         best = np.full(len(q), np.inf)
         for c in caps:
-            a_, b_ = np.array(c["a"]), np.array(c["b"])
+            a_, b_ = np.array(c["a"][:2]), np.array(c["b"][:2])
             ab = b_ - a_
             t = np.clip(((q - a_) @ ab) / max(ab @ ab, 1e-9), 0, 1)
             dd = np.linalg.norm(q - (a_ + t[:, None] * ab), axis=1) - c["r"]
@@ -220,13 +228,14 @@ def capsules_for(name):
     # to OBJ coordinates (metres, +Y up, front +Z)
     out = []
     for c in caps:
-        to = lambda q: [round((q[0] + 0.5 - cx) * PX, 5), round((y_floor - q[1] - 0.5) * PX, 5), round(c["z"] * PX, 5)]
+        to = lambda q: [round((q[0] + 0.5 - cx) * PX, 5), round((y_floor - q[1] - 0.5) * PX, 5),
+                        round((q[2] if len(q) > 2 else c["z"]) * PX, 5)]
         out.append(dict(part=c["part"], a=to(c["a"]), b=to(c["b"]), r=round(c["r"] * PX, 5)))
     # debug overlay on the drawing
     im = Image.open(os.path.join(ROOT, "src", f"{name}.png")).convert("RGB")
     dr = ImageDraw.Draw(im, "RGBA")
     for c in caps:
-        (ax, ay), (bx, by), r = c["a"], c["b"], c["r"]
+        (ax, ay), (bx, by), r = c["a"][:2], c["b"][:2], c["r"]
         dr.line([(ax, ay), (bx, by)], fill=(255, 0, 80, 255), width=3)
         for (x, y) in ((ax, ay), (bx, by)):
             dr.ellipse([x - r, y - r, x + r, y + r], outline=(0, 120, 255, 255), width=2)
@@ -271,7 +280,7 @@ CS = r'''// BananaPhysics.cs - Unity 3D physics (PhysX) for the banana OBJ model
 //  * Compound CapsuleColliders, one per limb. A non-convex MeshCollider on a dynamic
 //    Rigidbody is silently ignored, and a convex one would fill the gap between the legs.
 //    Radii include most of the thick ink outline, so contacts happen at the visible line.
-//    The legs banana's peel piece between the legs gets a BoxCollider from its mesh bounds.
+//    The legs banana's copied front and back legs get capsules along their bend too.
 //  * Every other collider under the model is removed (or disabled, inside a prefab) - in
 //    particular never put a MeshCollider on "Outline_Ink_*": that toon-outline shell is
 //    intentionally inside-out (inverted normals), so contacts would push objects INTO it.
@@ -305,6 +314,8 @@ public class BananaPhysics : MonoBehaviour
     public CollisionDetectionMode collisionDetection = CollisionDetectionMode.ContinuousSpeculative;
     [Tooltip("Freeze rotation around X and Z so the banana stays standing (typical for a character).")]
     public bool keepUpright = false;
+    [Tooltip("Draw the collider capsules and the centre of mass in the Scene view when selected.")]
+    public bool drawGizmos = true;
 
     struct Cap
     {
@@ -343,15 +354,75 @@ __ARMS__
         return null;
     }
 
-    Banana Detect()
+    Banana Detect(bool log = true)
     {
         if (banana != Banana.Auto) return banana;
         if (FindMesh("LegPeel") != null || FindMesh("LegSplit") != null) return Banana.Legs;
         if (FindMesh("ArmSeam") != null) return Banana.Arms;
         bool arms = name.ToLowerInvariant().Contains("arm");
-        Debug.LogWarning("BananaPhysics: could not recognise the model from its parts, guessing " +
-                         (arms ? "Arms" : "Legs") + " from the name. Set 'banana' explicitly.", this);
+        if (log)
+            Debug.LogWarning("BananaPhysics: could not recognise the model from its parts, guessing " +
+                             (arms ? "Arms" : "Legs") + " from the name. Set 'banana' explicitly.", this);
         return arms ? Banana.Arms : Banana.Legs;
+    }
+
+    // ---- read-only status for the inspector (BananaPhysicsEditor)
+    public Banana DetectedBanana => Detect(false);
+    public Transform CollidersRoot => transform.Find("Colliders");
+
+    /// colliders under the model that this component did not make (e.g. importer MeshColliders)
+    public int ForeignColliderCount
+    {
+        get
+        {
+            Transform holder = CollidersRoot;
+            int n = 0;
+            foreach (Collider c in GetComponentsInChildren<Collider>(true))
+                if (c.enabled && (holder == null || !c.transform.IsChildOf(holder))) n++;
+            return n;
+        }
+    }
+
+    public bool HasNonUniformScale
+    {
+        get
+        {
+            Vector3 ls = transform.lossyScale;
+            return Mathf.Abs(ls.x - ls.y) > 1e-3f || Mathf.Abs(ls.y - ls.z) > 1e-3f;
+        }
+    }
+
+    // capsules + centre of mass in the Scene view while the banana is selected
+    void OnDrawGizmosSelected()
+    {
+        if (!drawGizmos) return;
+        Transform holder = CollidersRoot;
+        if (holder != null)
+        {
+            Gizmos.color = new Color(0.1f, 0.85f, 1f, 0.9f);
+            foreach (CapsuleCollider cc in holder.GetComponentsInChildren<CapsuleCollider>(false))
+                DrawWireCapsule(cc);
+        }
+        Rigidbody rb = GetComponent<Rigidbody>();
+        if (rb != null)
+        {
+            Gizmos.matrix = Matrix4x4.identity;
+            Gizmos.color = new Color(1f, 0.3f, 0.1f, 1f);
+            Gizmos.DrawWireSphere(rb.worldCenterOfMass, 0.03f * transform.lossyScale.y);
+        }
+    }
+
+    static void DrawWireCapsule(CapsuleCollider cc)
+    {
+        Gizmos.matrix = cc.transform.localToWorldMatrix;
+        float r = cc.radius, half = Mathf.Max(cc.height * 0.5f - r, 0f);
+        Vector3 up = Vector3.up * half, c = cc.center;
+        Gizmos.DrawWireSphere(c + up, r);
+        Gizmos.DrawWireSphere(c - up, r);
+        Gizmos.DrawLine(c + up + Vector3.right * r, c - up + Vector3.right * r);
+        Gizmos.DrawLine(c + up - Vector3.right * r, c - up - Vector3.right * r);
+        Gizmos.DrawLine(c + up + Vector3.forward * r, c - up + Vector3.forward * r);
+        Gizmos.DrawLine(c + up - Vector3.forward * r, c - up - Vector3.forward * r);
     }
 
     [ContextMenu("Build Colliders")]
@@ -419,26 +490,9 @@ __ARMS__
             cc.height = len + 2f * cc.radius;
         }
 
-        // the legs banana's peel piece between the legs: a box around its mesh (+ its ink line)
-        MeshFilter flap = id == Banana.Legs ? FindMesh("Banana_LegPeel") : null;
+        // (older builds put a box on the piece between the legs; it is now capsules)
         Transform fb = holder.Find("Flap_Box");
-        if (flap != null)
-        {
-            Bounds fbnd = flap.sharedMesh.bounds;
-            Matrix4x4 m = transform.worldToLocalMatrix * flap.transform.localToWorldMatrix;
-            if (fb == null) fb = Child(holder, "Flap_Box");
-            Record(fb);
-            fb.localPosition = m.MultiplyPoint3x4(fbnd.center);
-            fb.localRotation = m.rotation;
-            fb.localScale = Vector3.one;
-            BoxCollider bc = fb.GetComponent<BoxCollider>();
-            if (bc == null) bc = AddComp<BoxCollider>(fb.gameObject);
-            Record(bc);
-            bc.enabled = true;
-            bc.center = Vector3.zero;
-            bc.size = Vector3.Scale(fbnd.size, m.lossyScale) + Vector3.one * (2f * OutlineWidth * s * k);
-        }
-        else if (fb != null) SetActive(fb.gameObject, false);
+        if (fb != null) SetActive(fb.gameObject, false);
 
         // leftovers from an older build: switch off instead of deleting (prefab-safe)
         for (Transform t; (t = holder.Find("Capsule_" + n)) != null; n++) SetActive(t.gameObject, false);

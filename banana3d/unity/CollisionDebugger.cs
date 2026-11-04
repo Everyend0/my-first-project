@@ -1,8 +1,32 @@
 using UnityEngine;
 
 /// Attach to both objects in a suspect pair. Remove after diagnosis.
+/// Tick 'showOnScreen' to also list the latest events in the Game view (IMGUI overlay).
 public class CollisionDebugger : MonoBehaviour
 {
+    public bool showOnScreen = false;
+    [Tooltip("Top-left corner of the on-screen list, in pixels.")]
+    public Vector2 screenPosition = new Vector2(10, 10);
+
+    const int MaxLines = 6;
+    readonly System.Collections.Generic.Queue<string> lines = new System.Collections.Generic.Queue<string>();
+
+    void Remember(string line)
+    {
+        lines.Enqueue($"{Time.time:0.00}s  {line}");
+        while (lines.Count > MaxLines) lines.Dequeue();
+    }
+
+    void OnGUI()
+    {
+        if (!showOnScreen) return;
+        GUILayout.BeginArea(new Rect(screenPosition.x, screenPosition.y, 420, 40 + 22 * MaxLines), GUI.skin.box);
+        GUILayout.Label($"[{name}] collisions");
+        if (lines.Count == 0) GUILayout.Label("(none yet)");
+        foreach (string l in lines) GUILayout.Label(l);
+        GUILayout.EndArea();
+    }
+
     void Start()   // Start, so colliders built in BananaPhysics.Awake are counted
     {
         // compound bodies (e.g. a banana with BananaPhysics) keep their colliders on
@@ -31,14 +55,20 @@ public class CollisionDebugger : MonoBehaviour
     }
 
     void OnCollisionEnter(Collision col)
-        => Debug.Log(
+    {
+        Debug.Log(
             $"[Collision] {name} hit {col.gameObject.name} | contacts: {col.contactCount} | impulse: {col.impulse.magnitude:F3}",
             this);
+        Remember($"hit {col.gameObject.name} ({col.contactCount} contacts, impulse {col.impulse.magnitude:F2})");
+    }
 
     void OnTriggerEnter(Collider other)
-        => Debug.Log(
+    {
+        Debug.Log(
             $"[Trigger] {name} entered by {other.gameObject.name} | other layer: {other.gameObject.layer}",
             this);
+        Remember($"trigger by {other.gameObject.name}");
+    }
 
     void OnCollisionEnter2D(Collision2D col)
         => Debug.Log(
