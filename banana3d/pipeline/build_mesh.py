@@ -23,6 +23,7 @@ import numpy as np
 import pyamg
 from scipy import ndimage as ndi
 from scipy import sparse
+from scipy.sparse import csgraph  # noqa: F401  (sparse.csgraph)
 from skimage import measure
 
 # fill_strokes: inner ink lines that do NOT separate two body parts are painted on
@@ -42,54 +43,148 @@ def disk(r):
     return x * x + y * y <= r * r
 
 
-def poisson(mask):
-    """Solve -lap(u) = 2 on mask (unit grid), u = 0 outside. Returns u (same grid)."""
+def poisson(mask, phi=None):
+    """Solve -lap(u) = 2 on the unit grid, u = 0 on the boundary.  Without `phi` the
+    boundary is the pixel mask.  With `phi` (signed distance, + inside) the boundary
+    is phi's sub-pixel zero line (Shortley-Weller stencil: an inside node next to the
+    boundary uses the true fractional distance to it) - no pixel staircase."""
+    if phi is not None:
+        mask = phi > 0
     H, W = mask.shape
     ys, xs = np.nonzero(mask)
     N = len(ys)
     idx = -np.ones(mask.shape, np.int64)
     idx[ys, xs] = np.arange(N)
-    rows, cols = [np.arange(N)], [np.arange(N)]
-    vals = [np.full(N, 4.0)]
-    for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
-        ny, nx = ys + dy, xs + dx
-        ok = (ny >= 0) & (ny < H) & (nx >= 0) & (nx < W)
-        nid = np.full(N, -1)
-        nid[ok] = idx[ny[ok], nx[ok]]
-        ok = nid >= 0
-        rows.append(np.arange(N)[ok])
-        cols.append(nid[ok])
-        vals.append(-np.ones(ok.sum()))
+    rows, cols, vals = [], [], []
+    diag = np.zeros(N)
+    for axis in (0, 1):
+        h = {}
+        nid = {}
+        for sgn in (-1, 1):
+            ny = ys + (sgn if axis == 0 else 0)
+            nx = xs + (sgn if axis == 1 else 0)
+            ok = (ny >= 0) & (ny < H) & (nx >= 0) & (nx < W)
+            j = np.full(N, -1)
+            j[ok] = idx[ny[ok], nx[ok]]
+            hh = np.ones(N)
+            if phi is not None:
+                out = j < 0
+                pi = phi[ys[out], xs[out]]
+                pj = np.full(out.sum(), -1.0)
+                ok2 = ok[out]
+                pj[ok2] = phi[ny[out][ok2], nx[out][ok2]]
+                hh[out] = np.clip(pi / np.maximum(pi - pj, 1e-9), 0.05, 1.0)
+            h[sgn], nid[sgn] = hh, j
+        hl, hr = h[-1], h[1]
+        for sgn, hs in ((-1, hl), (1, hr)):
+            c = 2.0 / ((hl + hr) * hs)
+            diag += c
+            inn = nid[sgn] >= 0
+            rows.append(np.arange(N)[inn])
+            cols.append(nid[sgn][inn])
+            vals.append(-c[inn])
+    rows.append(np.arange(N))
+    cols.append(np.arange(N))
+    vals.append(diag)
     A = sparse.csr_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))), shape=(N, N))
-    ml = pyamg.smoothed_aggregation_solver(A, symmetry="symmetric")
-    x = ml.solve(np.full(N, 2.0), tol=1e-9, accel="cg", maxiter=400)
+    if phi is None:
+        ml = pyamg.smoothed_aggregation_solver(A, symmetry="symmetric")
+        x = ml.solve(np.full(N, 2.0), tol=1e-9, accel="cg", maxiter=400)
+    else:
+        ml = pyamg.smoothed_aggregation_solver(A, symmetry="nonsymmetric")
+        x = ml.solve(np.full(N, 2.0), tol=1e-9, accel="gmres", maxiter=400)
     u = np.zeros(mask.shape)
     u[ys, xs] = x
     return u
 
 
-def inflate_field(mask, U, blur=2.0):
-    """Poisson solution extended smoothly outside, zero level centred on the mask
-    edge, returned in ORIGINAL-pixel^2 units on the 2x grid.
-
-    The edge slope is averaged ALONG the edge before it is used: taking it per edge
-    pixel gave every pixel-staircase step its own offset, which showed up as fine
-    horizontal ribbing in glossy highlights at grazing angles (side views)."""
-    # sub-pixel smoothing of the traced edge: removes raster/scan jitter (period of a
-    # few px) but keeps the hand-drawn wobble (tens of px) - so the front outline
-    # still matches the drawing while side views get clean highlights
-    mask = ndi.gaussian_filter(mask.astype(np.float32), 3.0) > 0.5
-    u = poisson(mask)
+def edge_phi(mask, K=None, sigma=5.0, band=6.0):
+    """Sub-pixel signed distance (2x px, + inside) to the part's edge.
+    Near yellow/black ink edges it follows the drawing's anti-aliased line (K =
+    blackness, edge at K = 0.5) instead of the pixel staircase; then the edge is
+    low-passed along its length (sigma px): scan jitter with a period of 10-20 px is
+    invisible from the front but, on the steep rim of an inflated shape, it tilts
+    the surface by several degrees and shows up as glossy beads / ribbing.  The
+    hand-drawn wobble (tens of px) is kept."""
+    d_in = ndi.distance_transform_edt(mask)
     d_out = ndi.distance_transform_edt(~mask)
-    edge = mask & ~ndi.binary_erosion(mask)
-    num = ndi.gaussian_filter(np.where(edge, u, 0.0), 3.0)
-    den = ndi.gaussian_filter(edge.astype(float), 3.0)
+    sb = np.where(mask, d_in - 0.5, -(d_out - 0.5))
+    phi0 = ndi.gaussian_filter(sb, 0.7)
+    if K is not None:
+        L = ndi.gaussian_filter(0.5 - K.astype(np.float64), 1.0)
+        gy, gx = np.gradient(L)
+        gm = np.hypot(gx, gy)
+        dK = L / np.maximum(gm, 1e-6)
+        valid = (np.abs(sb) < 2.5) & (gm > 0.08) & (np.abs(dK - sb) < 1.5)
+        wt = ndi.gaussian_filter(valid.astype(np.float64), 1.0) * (1 - smoothstep(1.5, 4.0, np.abs(sb)))
+        phi0 = (1 - wt) * phi0 + wt * np.clip(dK, -4, 4)
+    d_s = smooth_edge_distance(phi0, sigma=sigma, band=band + 2)
+    if d_s is None:
+        return phi0
+    wt = 1 - smoothstep(band - 2.0, band, np.abs(sb))
+    ok = np.isfinite(d_s)
+    return np.where(ok, (1 - wt) * phi0 + wt * np.nan_to_num(d_s), phi0)
+
+
+def inflate_field(mask, U, K=None, blur=1.0):
+    """Poisson inflation field on the 2x grid, in ORIGINAL-pixel^2 units, zero on the
+    (sub-pixel, smoothed) edge and extended linearly outside it."""
+    phi = edge_phi(mask, K)
+    u = poisson(mask, phi=phi)
+    inside = phi > 0
+    # slope at the edge, averaged along the edge, carried outward linearly
+    near = inside & (phi > 0.4) & (phi < 2.5)
+    g = np.where(near, u / np.maximum(phi, 1e-6), 0.0)
+    num = ndi.gaussian_filter(g, 6.0)
+    den = ndi.gaussian_filter(near.astype(float), 6.0)
     Gs = num / np.maximum(den, 1e-9)
-    _, ind_e = ndi.distance_transform_edt(~edge, return_indices=True)
-    Gf = Gs[ind_e[0], ind_e[1]]
-    uf = np.where(mask, u - 0.5 * Gf, -Gf * (d_out - 0.5))
+    has = den > 1e-3
+    _, ind = ndi.distance_transform_edt(~has, return_indices=True)
+    Gf = Gs[ind[0], ind[1]]
+    uf = np.where(inside, u, Gf * phi)
+    # inside, very close to the edge, use the same linear law (Poisson nodes there
+    # are few and the stencil is least accurate)
+    w = 1 - smoothstep(1.0, 3.0, phi)
+    uf = np.where(inside, (1 - w) * uf + w * Gf * phi, uf)
     uf = ndi.gaussian_filter(uf, blur)
     return uf / (U * U)
+
+
+def smooth_edge_distance(f, sigma, band=7.0):
+    """signed distance (+ inside, pixels) to the zero contour of f after smoothing
+    that contour along its arc length (gaussian, `sigma` px); NaN beyond `band`."""
+    out = np.full(f.shape, np.nan)
+    pts, nrm = [], []
+    for c in measure.find_contours(f, 0.0):
+        if len(c) < 30:
+            continue
+        closed = np.linalg.norm(c[0] - c[-1]) < 1.5
+        seg = np.linalg.norm(np.diff(c, axis=0), axis=1)
+        sarc = np.concatenate([[0], np.cumsum(seg)])
+        t = np.arange(0, sarc[-1], 0.5)
+        y, x = np.interp(t, sarc, c[:, 0]), np.interp(t, sarc, c[:, 1])
+        mode = "wrap" if closed else "nearest"
+        ys = ndi.gaussian_filter1d(y, sigma / 0.5, mode=mode)
+        xs = ndi.gaussian_filter1d(x, sigma / 0.5, mode=mode)
+        ty, tx = np.gradient(ys), np.gradient(xs)
+        n = np.hypot(ty, tx) + 1e-12
+        ny, nx = tx / n, -ty / n
+        probe = ndi.map_coordinates(f, [ys + 2 * ny, xs + 2 * nx], order=1)
+        if np.mean(probe > 0) < 0.5:  # make the normal point inside (f > 0)
+            ny, nx = -ny, -nx
+        pts.append(np.stack([ys, xs], 1))
+        nrm.append(np.stack([ny, nx], 1))
+    if not pts:
+        return None
+    from scipy.spatial import cKDTree
+    P, N = np.concatenate(pts), np.concatenate(nrm)
+    # only pixels near the edge
+    near = ndi.distance_transform_edt(~(np.abs(ndi.gaussian_filter(np.sign(f), 0.5)) < 0.999)) <= band
+    yy, xx = np.nonzero(near)
+    dist, j = cKDTree(P).query(np.stack([yy, xx], 1).astype(float))
+    sgn = np.sign((yy - P[j, 0]) * N[j, 0] + (xx - P[j, 1]) * N[j, 1])
+    out[yy, xx] = dist * np.where(sgn == 0, 1, sgn)
+    return out
 
 
 def signed_dist(mask, U, blur=0.8):
@@ -176,6 +271,45 @@ def hull_shell(u2, k, z_off, hmax, region, T1, U, seed, A=0.5):
     return mc(H.astype(np.float32), (x0 / U + 0.5, y0 / U + 0.5, zs[0]), (1, 1, 1))
 
 
+def clean_mesh(v, f, min_faces=200, min_frac=0.02):
+    """remove duplicate faces (incl. the same triangle wound both ways) and loose
+    islands that are tiny next to the piece's biggest island; drop unused verts"""
+    info = []
+    key = np.sort(f, axis=1)
+    _, inv, cnt = np.unique(key, axis=0, return_inverse=True, return_counts=True)
+    dup = cnt[inv.ravel()] > 1
+    if dup.any():
+        # keep one copy of a face only if all copies share the same winding
+        keep = ~dup
+        seen = {}
+        for i in np.nonzero(dup)[0]:
+            seen.setdefault(int(inv.ravel()[i]), []).append(i)
+        for ids in seen.values():
+            w = {tuple(np.roll(f[i], -int(np.argmin(f[i])))) for i in ids}
+            if len(w) == 1:
+                keep[ids[0]] = True
+        info.append(f"{int((~keep).sum())} duplicate faces")
+        f = f[keep]
+    n = len(v)
+    i = np.concatenate([f[:, 0], f[:, 1], f[:, 2]])
+    j = np.concatenate([f[:, 1], f[:, 2], f[:, 0]])
+    A = sparse.coo_matrix((np.ones(len(i)), (i, j)), shape=(n, n))
+    ncomp, lab = sparse.csgraph.connected_components(A, directed=False)
+    if ncomp > 1:
+        fl = lab[f[:, 0]]
+        sizes = np.bincount(fl, minlength=ncomp)
+        big = sizes.max()
+        ok = (sizes >= min_faces) | (sizes >= min_frac * big)
+        drop = ~ok[fl]
+        if drop.any():
+            info.append(f"{int((~ok & (sizes > 0)).sum())} crumbs ({int(drop.sum())} faces)")
+            f = f[~drop]
+    used = np.zeros(n, bool)
+    used[f.ravel()] = True
+    remap = np.cumsum(used) - 1
+    return v[used], remap[f].astype(np.int32), ", ".join(info)
+
+
 def bbox(mask, pad):
     ys, xs = np.nonzero(mask)
     return max(ys.min() - pad, 0), ys.max() + pad + 1, max(xs.min() - pad, 0), xs.max() + pad + 1
@@ -238,6 +372,7 @@ def build(name, seg_npz, out_npz):
     U = int(d["U"])
     S, I, parts = d["S"], d["I"].copy(), d["parts"].copy()
     caps, face, strokes = d["caps"], d["face"], d["strokes"]
+    Kd = d["K"].astype(np.float32)
     H2, W2 = S.shape
     pieces = {}
     meta = {"parts": []}
@@ -297,12 +432,17 @@ def build(name, seg_npz, out_npz):
             k = cfg["flap_k"]
             # its ink line: drawn width on the visible bottom arc, inner-line weight
             # (like the drawn strokes) on the edge that only shows from behind
-            arc_vis = reg & (D_bg / U <= 1.6 * medT)
-            w = smoothstep(4.0, 14.0, ndi.distance_transform_edt(~arc_vis) / U)
+            # (the zone below the drawn arc keeps the measured width: the hull is
+            # evaluated out there, one line width below the flap's edge)
+            xr = np.nonzero(reg)[1]
+            Xg = np.arange(W2)[None, :]
+            below = (np.arange(H2)[:, None] >= np.polyval(cf, np.arange(W2))[None, :] - 4) \
+                & (Xg >= xr.min()) & (Xg <= xr.max())
+            w = np.clip(ndi.gaussian_filter((~below).astype(np.float32), 6.0), 0, 1)
             Tf2 = (1 - w) * T2 + w * np.minimum(T2, 0.72 * medT)
             Th = down2(Tf2)
         t = time.time()
-        u2 = inflate_field(region, U)
+        u2 = inflate_field(region, U, K=Kd)
         print(f"  part {p}: poisson {region.sum()} px ({time.time() - t:.1f}s)", flush=True)
         hmax = k * np.sqrt(max(u2.max(), 0))
         if p != 1:
@@ -324,8 +464,22 @@ def build(name, seg_npz, out_npz):
         u1 = down2(u2[y0:y1, x0:x1])
         zc = down2(z_off[y0:y1, x0:x1])[:, :, None] if np.ndim(z_off) == 2 else z_off
         zs = np.arange(np.floor(np.min(zc) - hmax - 3), np.ceil(np.max(zc) + hmax + 3) + 1, 1.0)
-        F = u1[:, :, None] - ((zs[None, None, :] - zc) / k) ** 2
-        F = F.astype(np.float32)
+        dz = zs[None, None, :] - zc
+        F = u1[:, :, None] - (dz / k) ** 2
+        # divide by |grad F| -> ~distance to the surface: linear across every voxel,
+        # so marching cubes places vertices accurately also where the surface turns
+        # steep near the rim (the raw quadratic field left lattice-moire 'beads')
+        gy, gx = np.gradient(u1)
+        if np.ndim(zc) == 3:
+            zcy, zcx = np.gradient(zc[:, :, 0])
+            Fx = gx[:, :, None] + 2 * dz / k ** 2 * zcx[:, :, None]
+            Fy = gy[:, :, None] + 2 * dz / k ** 2 * zcy[:, :, None]
+            gF = np.sqrt(Fx ** 2 + Fy ** 2 + (2 * dz / k ** 2) ** 2)
+            del Fx, Fy
+        else:
+            gF = np.sqrt((gx ** 2 + gy ** 2)[:, :, None] + (2 * dz / k ** 2) ** 2)
+        F = (F / np.maximum(gF, 1e-3)).astype(np.float32)
+        del gF, dz
         origin = (x0 / U + 0.5, y0 / U + 0.5, zs[0])
         # toon outline shell = true 3D offset surface of the part (no folds)
         hv, hf = hull_shell(u2, k, z_off, hmax, region, Th, U, seed=p, A=0.5 if p == 1 else 0.2)
@@ -334,8 +488,7 @@ def build(name, seg_npz, out_npz):
         cap_here = caps & ndi.binary_dilation(region, structure=disk(4))
         if cap_here.any():
             sc = down2(signed_dist(cap_here, U)[y0:y1, x0:x1])
-            Gc = np.sqrt(np.maximum(u1, 0)) * 2.0 + 20.0  # ~|grad u| near the rim
-            Sc = (sc * Gc)[:, :, None].astype(np.float32)
+            Sc = sc[:, :, None].astype(np.float32)  # same (distance) units as F
             for tag, fld in (("yellow", np.minimum(F, -Sc)), ("cap", np.minimum(F, Sc))):
                 v, f = mc(fld, origin, (1, 1, 1))
                 # keep the yellow/black border (and the internal cut) exactly in place
@@ -347,14 +500,30 @@ def build(name, seg_npz, out_npz):
         del F
 
     # ---------- thin black decals on a part's surface ----------------------------
-    def decal(mask, p, tag, a=2.0, delta=0.6, side=1):
-        """side=+1: front surface, side=-1: back surface (mirror image)"""
+    def decal(mask, p, tag, a=2.0, delta=0.6, side=1, full=False, grow=0.3):
+        """side=+1: front surface, side=-1: back surface (mirror image).
+        full=True: the ink goes down through the body to just short of the opposite
+        surface, so steep walls (e.g. where a painted line meets a cut) stay black."""
         u2, k, z_off, region = fields[p]
         y0, y1, x0, x1 = bbox(mask, 6)
-        s = signed_dist(mask, U)[y0:y1, x0:x1]
+        # +grow px: rendered ink edges lose ~0.3 px to anti-aliasing against yellow
+        s = signed_dist(mask, U)[y0:y1, x0:x1] + grow
         zc = z_off[y0:y1, x0:x1] if np.ndim(z_off) == 2 else z_off
-        hs = zc + side * k * np.sqrt(np.maximum(u2[y0:y1, x0:x1], 0))
-        lo, hi = (hs - a, hs + delta) if side > 0 else (hs - delta, hs + a)
+        hk = k * np.sqrt(np.maximum(u2[y0:y1, x0:x1], 0))
+        hs = zc + side * hk
+        if full:
+            opp = zc - side * hk  # the opposite surface
+            if side > 0:
+                lo, hi = np.minimum(np.maximum(hs - 1e3, opp + 0.5), hs - a), hs + delta
+            else:
+                lo, hi = hs - delta, np.maximum(np.minimum(hs + 1e3, opp - 0.5), hs + a)
+        else:
+            # never reach through a thin part (e.g. the flap's rim) to its other side
+            opp = zc - side * hk
+            if side > 0:
+                lo, hi = np.minimum(np.maximum(hs - a, opp + 0.3), hs - 0.5), hs + delta
+            else:
+                lo, hi = hs - delta, np.maximum(np.minimum(hs + a, opp - 0.3), hs + 0.5)
         msk = mask[y0:y1, x0:x1]
         zlo, zhi = np.floor(lo[msk].min() - 2), np.ceil(hi[msk].max() + 2)
         zs = np.arange(zlo, zhi + 0.5, 0.5)
@@ -377,9 +546,12 @@ def build(name, seg_npz, out_npz):
         if m.sum() < 400:
             continue
         j += 1
-        decal(m, 1, f"{cfg['seam_name']}{j}")
+        # where a painted stroke continues as a cut line (leg split -> flap lines),
+        # reach 6 px over the cut so no sliver of body or flap shows in between
+        m = m | (ndi.binary_dilation(m, structure=disk(12)) & strokes_cut)
+        decal(m, 1, f"{cfg['seam_name']}{j}", delta=1.4, full=True)
         if cfg["seam_back"]:
-            decal(m, 1, f"{cfg['seam_name']}back{j}", side=-1)
+            decal(m, 1, f"{cfg['seam_name']}back{j}", delta=1.4, side=-1, full=True)
     if cfg["paint_strokes_on_flap"] and nparts >= 2:
         # the lines between legs and the back flap: paint them on the flap's front
         near_flap = ndi.distance_transform_edt(parts != 2) <= 30
@@ -391,6 +563,12 @@ def build(name, seg_npz, out_npz):
             m = ndi.binary_dilation(m, structure=disk(2)) & fields[2][3]
             decal(m, 2, f"flapline{i}", a=2.0, delta=0.8)
 
+    # mesh hygiene: drop marching-cubes crumbs (tiny loose islands) and doubled faces
+    for name in sorted({k.rsplit("_", 1)[0] for k in pieces}):
+        v, f, info = clean_mesh(pieces[name + "_v"], pieces[name + "_f"])
+        pieces[name + "_v"], pieces[name + "_f"] = v, f
+        if info:
+            print(f"  clean {name}: {info}", flush=True)
     meta["pieces"] = sorted({k.rsplit("_", 1)[0] for k in pieces})
     np.savez_compressed(out_npz, T=T1.astype(np.float32), meta=json.dumps(meta), fill_mask=fill, **pieces)
     print(json.dumps(meta, indent=1))

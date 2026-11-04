@@ -242,13 +242,14 @@ def main():
     ap.add_argument("--ortho-check", action="store_true")
     ap.add_argument("--elev", type=float, default=6.0)
     ap.add_argument("--outdir", default=None)
+    ap.add_argument("--mesh", default=None, help="mesh npz (default work/<name>.mesh.npz)")
     a = ap.parse_args()
 
     name = a.name
     out = a.outdir or os.path.join(ROOT, "output", name)
     os.makedirs(os.path.join(out, "renders"), exist_ok=True)
     seg = np.load(os.path.join(ROOT, "work", f"{name}.seg.npz"))
-    data = np.load(os.path.join(ROOT, "work", f"{name}.mesh.npz"))
+    data = np.load(a.mesh or os.path.join(ROOT, "work", f"{name}.mesh.npz"))
     meta = json.loads(str(data["meta"]))
     T1 = data["T"]
     S = seg["S"]
@@ -266,8 +267,9 @@ def main():
 
     m_yel = principled("Banana_Yellow", YELLOW, rough=0.38, coat=0.25, coat_rough=0.18, spec=0.4)
     # ink reads as solid black like the drawing; only small, crisp glints remain
-    m_blk = principled("Ink_Black", (0.002, 0.002, 0.002), rough=0.5, coat=0.18, coat_rough=0.06, spec=0.12)
-    m_line = principled("Ink_Line_Matte", (0.002, 0.002, 0.002), rough=0.85, coat=0.0, spec=0.05)
+    m_blk = principled("Ink_Black", (0.002, 0.002, 0.002), rough=0.55, coat=0.15, coat_rough=0.06, spec=0.06)
+    # drawn-on ink (face, inner lines): flat marker black from every angle
+    m_line = principled("Ink_Line_Matte", (0.002, 0.002, 0.002), rough=0.9, coat=0.0, spec=0.0)
     m_out = outline_material()
 
     root = bpy.data.objects.new("Banana", None)
@@ -294,12 +296,12 @@ def main():
         main = piece.startswith("part1")
         if "yellow" in piece:
             mat, label = m_yel, "Banana_Body" if main else "Banana_BackPeelFlap"
-            target = 170000 if main else 30000
+            target = int(os.environ.get("BANANA_BODY_TRIS", "170000")) if main else 30000
         elif "cap" in piece:
             mat, label = m_blk, "Banana_Tips_Black" if main else "BackPeelFlap_Tip_Black"
             target = 16000
         elif piece.startswith("face"):
-            mat, label = m_blk, face_names.get(piece, "Face_" + piece)
+            mat, label = m_line, face_names.get(piece, "Face_" + piece)
             target = 6000
         elif piece.startswith("armseamback"):
             mat, label = m_line, f"InkLine_ArmSeam_{piece[11:]}_Back"
@@ -341,10 +343,10 @@ def main():
         mats = {
             "Banana_Yellow": {"Ka": "0 0 0", "Kd": "0.9961 0.9451 0.0392", "Ks": "0.35 0.35 0.35",
                               "Ns": "180", "d": "1", "illum": "2", "Pr": "0.38", "Pc": "0.25", "Pcr": "0.18"},
-            "Ink_Black": {"Ka": "0 0 0", "Kd": "0.0020 0.0020 0.0020", "Ks": "0.25 0.25 0.25",
-                          "Ns": "220", "d": "1", "illum": "2", "Pr": "0.5", "Pc": "0.18", "Pcr": "0.06"},
-            "Ink_Line_Matte": {"Ka": "0 0 0", "Kd": "0.0020 0.0020 0.0020", "Ks": "0.02 0.02 0.02",
-                               "Ns": "10", "d": "1", "illum": "2", "Pr": "0.85"},
+            "Ink_Black": {"Ka": "0 0 0", "Kd": "0.0020 0.0020 0.0020", "Ks": "0.2 0.2 0.2",
+                          "Ns": "220", "d": "1", "illum": "2", "Pr": "0.55", "Pc": "0.15", "Pcr": "0.06"},
+            "Ink_Line_Matte": {"Ka": "0 0 0", "Kd": "0.0020 0.0020 0.0020", "Ks": "0 0 0",
+                               "Ns": "1", "d": "1", "illum": "1", "Pr": "0.9"},
             "Outline_Ink": {"Ka": "0 0 0", "Kd": "0 0 0", "Ks": "0 0 0", "Ns": "1", "Ke": "0 0 0",
                             "d": "1", "illum": "0"},
         }

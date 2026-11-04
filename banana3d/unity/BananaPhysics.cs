@@ -22,7 +22,15 @@
 //  * Works with any import scale (measured from the Banana_Body mesh) and with Unity's
 //    X-mirroring of OBJ files (read from the Face_Mouth mesh, which is off-centre).
 //    Mesh Read/Write is NOT required. Keep the model's scale uniform (x = y = z).
+//  * The Rigidbody's centre of mass is set to the real centre of the model (overlapping
+//    capsules would otherwise pull it off). A banana has round feet, so on its own it
+//    tips over like a real one - tick 'keepUpright' to lock X/Z rotation for a character.
+//  * Editor rebuilds are undoable (Ctrl+Z) and mark the scene dirty.
 using UnityEngine;
+#if UNITY_EDITOR
+using UnityEditor;
+using UnityEditor.SceneManagement;
+#endif
 
 [DisallowMultipleComponent]
 public class BananaPhysics : MonoBehaviour
@@ -33,6 +41,8 @@ public class BananaPhysics : MonoBehaviour
     public bool addRigidbody = true;
     public float mass = 1f;
     public CollisionDetectionMode collisionDetection = CollisionDetectionMode.ContinuousSpeculative;
+    [Tooltip("Freeze rotation around X and Z so the banana stays standing (typical for a character).")]
+    public bool keepUpright = false;
 
     struct Cap
     {
@@ -67,6 +77,20 @@ public class BananaPhysics : MonoBehaviour
         new Cap(-0.183f, 0.735f, 0.0f, -0.139f, 0.869f, 0.0f, 0.13632f),
         new Cap(-0.11011f, 0.89127f, 0.0f, -0.043f, 0.943f, 0.0f, 0.17708f),
         new Cap(-0.11011f, 0.89127f, 0.0f, -0.139f, 0.869f, 0.0f, 0.1406f),
+        new Cap(-0.23712f, 1.009f, 0.0f, -0.2365f, 1.0665f, 0.0f, 0.02688f),
+        new Cap(-0.2345f, 1.0685f, 0.0f, -0.2335f, 1.0755f, 0.0f, 0.02688f),
+        new Cap(-0.23139f, 1.0872f, 0.0f, -0.23139f, 1.0872f, 0.0f, 0.02688f),
+        new Cap(-0.22939f, 1.0972f, 0.0f, -0.22939f, 1.0972f, 0.0f, 0.02688f),
+        new Cap(-0.2285f, 1.1025f, 0.0f, -0.2285f, 1.1025f, 0.0f, 0.02688f),
+        new Cap(0.0025f, 1.4645f, 0.0f, 0.0025f, 1.4645f, 0.0f, 0.02688f),
+        new Cap(0.017f, 1.46112f, 0.0f, 0.0345f, 1.4505f, 0.0f, 0.02688f),
+        new Cap(0.00117f, 0.61505f, 0.0f, -0.049f, 0.60688f, 0.0f, 0.02688f),
+        new Cap(-0.053f, 0.60688f, 0.0f, -0.0825f, 0.6115f, 0.0f, 0.02688f),
+        new Cap(-0.56483f, 0.06505f, 0.0f, -0.56483f, 0.06505f, 0.0f, 0.02688f),
+        new Cap(-0.57083f, 0.06305f, 0.0f, -0.6135f, 0.0375f, 0.0f, 0.02688f),
+        new Cap(-0.6175f, 0.0375f, 0.0f, -0.6565f, 0.0295f, 0.0f, 0.02688f),
+        new Cap(-0.65317f, 0.02905f, 0.0f, -0.70517f, 0.05305f, 0.0f, 0.02688f),
+        new Cap(-0.7135f, 0.0565f, 0.0f, -0.71499f, 0.05801f, 0.0f, 0.02688f),
     };
     static readonly Cap[] Arms = {
         new Cap(0.14493f, 0.19132f, 0.0f, 0.08619f, 0.58699f, 0.0f, 0.18168f),
@@ -94,6 +118,14 @@ public class BananaPhysics : MonoBehaviour
         new Cap(-0.24654f, 0.78016f, 0.0f, -0.251f, 0.777f, 0.0f, 0.09596f),
         new Cap(0.089f, 0.903f, 0.0f, 0.08141f, 0.958f, 0.0f, 0.21073f),
         new Cap(0.08141f, 0.958f, 0.0f, 0.081f, 0.961f, 0.0f, 0.20771f),
+        new Cap(-0.0311f, 0.21063f, 0.0f, -0.03669f, 0.251f, 0.0f, 0.02731f),
+        new Cap(-0.1741f, 0.95037f, 0.0f, -0.15659f, 1.00095f, 0.0f, 0.02731f),
+        new Cap(-0.1531f, 1.00937f, 0.0f, -0.14497f, 1.04314f, 0.0f, 0.02731f),
+        new Cap(-0.0071f, 1.65937f, 0.0f, -0.00914f, 1.65697f, 0.0f, 0.02731f),
+        new Cap(0.2401f, 0.04763f, 0.0f, 0.20837f, 0.0379f, 0.0f, 0.02731f),
+        new Cap(0.20637f, 0.0359f, 0.0f, 0.175f, 0.03331f, 0.0f, 0.02731f),
+        new Cap(0.15714f, 0.03103f, 0.0f, 0.09686f, 0.02703f, 0.0f, 0.02731f),
+        new Cap(0.09863f, 0.0269f, 0.0f, 0.06841f, 0.04605f, 0.0f, 0.02731f),
     };
     // measured on the exported OBJ files
     const float LegsBodyMeshHeight = 1.32825f;   // y-size of the Banana_Body mesh
@@ -101,6 +133,8 @@ public class BananaPhysics : MonoBehaviour
     const float LegsMouthCenterX = -0.027f;     // x of the Face_Mouth mesh centre
     const float ArmsMouthCenterX = 0.073f;
     const float OutlineWidth = 0.03192f;            // ink line counted as solid (metres)
+    static readonly Vector3 LegsCenterOfMass = new Vector3(-0.06205f, 0.68532f, -0.00087f);   // volume centre, OBJ space
+    static readonly Vector3 ArmsCenterOfMass = new Vector3(0.07492f, 0.78232f, -0.0f);
 
     void Reset() { Build(); }
 
@@ -134,16 +168,14 @@ public class BananaPhysics : MonoBehaviour
         Cap[] caps = id == Banana.Arms ? Arms : Legs;
         float bodyH = id == Banana.Arms ? ArmsBodyMeshHeight : LegsBodyMeshHeight;
         float mouthX = id == Banana.Arms ? ArmsMouthCenterX : LegsMouthCenterX;
+        Vector3 com = id == Banana.Arms ? ArmsCenterOfMass : LegsCenterOfMass;
 
         // 1) generated colliders live under "Colliders" (reused on rebuild, so it also works
         //    on prefab instances); anything else - e.g. importer MeshColliders on the inverted
         //    outline shell - is removed
         Transform holder = transform.Find("Colliders");
-        if (holder == null)
-        {
-            holder = new GameObject("Colliders").transform;
-            holder.SetParent(transform, false);
-        }
+        if (holder == null) holder = NewChild(transform, "Colliders");
+        Record(holder);
         holder.localPosition = Vector3.zero; holder.localRotation = Quaternion.identity; holder.localScale = Vector3.one;
         foreach (Collider c in GetComponentsInChildren<Collider>(true))
             if (!c.transform.IsChildOf(holder)) Remove(c);
@@ -180,11 +212,13 @@ public class BananaPhysics : MonoBehaviour
             Vector3 d = b - a;
             float len = d.magnitude;
             Transform t = Child(holder, "Capsule_" + i);
+            Record(t);
             t.localPosition = (a + b) * 0.5f;
             t.localRotation = len > 1e-6f ? Quaternion.FromToRotation(Vector3.up, d / len) : Quaternion.identity;
             t.localScale = Vector3.one;
             CapsuleCollider cc = t.GetComponent<CapsuleCollider>();
-            if (cc == null) cc = t.gameObject.AddComponent<CapsuleCollider>();
+            if (cc == null) cc = AddComp<CapsuleCollider>(t.gameObject);
+            Record(cc);
             cc.enabled = true;
             cc.center = Vector3.zero;
             cc.direction = 1;
@@ -200,58 +234,109 @@ public class BananaPhysics : MonoBehaviour
             Bounds fbnd = flap.sharedMesh.bounds;
             Matrix4x4 m = transform.worldToLocalMatrix * flap.transform.localToWorldMatrix;
             if (fb == null) fb = Child(holder, "Flap_Box");
-            fb.gameObject.SetActive(true);
+            Record(fb);
             fb.localPosition = m.MultiplyPoint3x4(fbnd.center);
             fb.localRotation = m.rotation;
             fb.localScale = Vector3.one;
             BoxCollider bc = fb.GetComponent<BoxCollider>();
-            if (bc == null) bc = fb.gameObject.AddComponent<BoxCollider>();
+            if (bc == null) bc = AddComp<BoxCollider>(fb.gameObject);
+            Record(bc);
+            bc.enabled = true;
             bc.center = Vector3.zero;
             bc.size = Vector3.Scale(fbnd.size, m.lossyScale) + Vector3.one * (2f * OutlineWidth * s * k);
         }
-        else if (fb != null) fb.gameObject.SetActive(false);
+        else if (fb != null) SetActive(fb.gameObject, false);
 
         // leftovers from an older build: switch off instead of deleting (prefab-safe)
-        for (Transform t; (t = holder.Find("Capsule_" + n)) != null; n++) t.gameObject.SetActive(false);
+        for (Transform t; (t = holder.Find("Capsule_" + n)) != null; n++) SetActive(t.gameObject, false);
 
         // 4) single dynamic Rigidbody on the root
         if (addRigidbody)
         {
             Rigidbody rb = GetComponent<Rigidbody>();
-            if (rb == null) rb = gameObject.AddComponent<Rigidbody>();
+            if (rb == null) rb = AddComp<Rigidbody>(gameObject);
+            Record(rb);
             rb.mass = mass;
             rb.isKinematic = false;
+            rb.detectCollisions = true;
             rb.interpolation = RigidbodyInterpolation.Interpolate;
             rb.collisionDetectionMode = collisionDetection;
+            rb.centerOfMass = bodyToRoot.MultiplyPoint3x4(Map(com, s, mirror));
+            if (keepUpright)
+                rb.constraints |= RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
         }
+#if UNITY_EDITOR
+        if (!Application.isPlaying)
+        {
+            EditorUtility.SetDirty(this);
+            if (gameObject.scene.IsValid()) EditorSceneManager.MarkSceneDirty(gameObject.scene);
+        }
+#endif
     }
 
     static Vector3 Map(Vector3 p, float s, float mirror) => new Vector3(mirror * p.x * s, p.y * s, p.z * s);
 
+    // ---- small helpers: in the editor every change goes through Undo
+    static Transform NewChild(Transform parent, string childName)
+    {
+        GameObject go = new GameObject(childName);
+        go.transform.SetParent(parent, false);
+#if UNITY_EDITOR
+        if (!Application.isPlaying) Undo.RegisterCreatedObjectUndo(go, "Build Banana Colliders");
+#endif
+        return go.transform;
+    }
+
     static Transform Child(Transform parent, string childName)
     {
         Transform t = parent.Find(childName);
-        if (t == null)
-        {
-            t = new GameObject(childName).transform;
-            t.SetParent(parent, false);
-        }
-        t.gameObject.SetActive(true);
+        if (t == null) t = NewChild(parent, childName);
+        SetActive(t.gameObject, true);
         return t;
+    }
+
+    static T AddComp<T>(GameObject go) where T : Component
+    {
+#if UNITY_EDITOR
+        if (!Application.isPlaying) return Undo.AddComponent<T>(go);
+#endif
+        return go.AddComponent<T>();
+    }
+
+    static void Record(Object o)
+    {
+#if UNITY_EDITOR
+        if (!Application.isPlaying) Undo.RecordObject(o, "Build Banana Colliders");
+#endif
+    }
+
+    static void SetActive(GameObject go, bool on)
+    {
+        if (go.activeSelf == on) return;
+        Record(go);
+        go.SetActive(on);
     }
 
     static void Remove(Component c)
     {
+        // switch it off first: Destroy() only happens at the end of the frame, and the
+        // inside-out outline shell must not take part in even one physics step
+        if (c is Collider col0) { Record(col0); col0.enabled = false; }
+        if (c is Rigidbody rb0) { Record(rb0); rb0.isKinematic = true; rb0.detectCollisions = false; }
         try
         {
+#if UNITY_EDITOR
+            if (!Application.isPlaying) { Undo.DestroyObjectImmediate(c); return; }
+#endif
             if (Application.isPlaying) Destroy(c); else DestroyImmediate(c);
         }
         catch (System.InvalidOperationException)
         {
-            // components that belong to a prefab asset cannot be destroyed on the instance
-            if (c is Collider col) col.enabled = false;
-            else Debug.LogWarning("BananaPhysics: remove " + c.GetType().Name + " on '" + c.name +
-                                  "' in the prefab - a child Rigidbody splits the compound body.", c);
+            // components that belong to a prefab asset cannot be destroyed on the instance;
+            // a disabled collider is harmless, a child Rigidbody has to go in the prefab
+            if (c is Rigidbody)
+                Debug.LogWarning("BananaPhysics: remove the Rigidbody on '" + c.name +
+                                 "' in the prefab - a child Rigidbody splits the compound body.", c);
         }
     }
 }

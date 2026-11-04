@@ -16,6 +16,7 @@ import os
 import numpy as np
 from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
+from skimage import measure
 from skimage.morphology import skeletonize
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -171,6 +172,51 @@ def capsules_for(name):
                 for q0, q1, rt in tips:
                     if np.linalg.norm(q1 - q0) > 0.5:
                         caps.append(dict(part=p, a=(q0[1], q0[0]), b=(q1[1], q1[0]), r=float(rt), z=0.0))
+    # close coverage gaps along the visible outer edge (soles, tips): wherever the
+    # outline's outer edge lies > 3 px outside every capsule, add a small capsule that
+    # touches that edge from inside - feet then rest on y = 0 like the drawing
+    Sd = S[::U, ::U]
+    rf = 0.8 * meta["outline_median_px"]
+    cont = max(measure.find_contours(Sd.astype(np.float32), 0.5), key=len)[::2]  # (row, col)
+    P = cont[:, ::-1]  # (x, y)
+    tng = np.gradient(P, axis=0)
+    nrm = np.stack([-tng[:, 1], tng[:, 0]], 1) / (np.linalg.norm(tng, axis=1, keepdims=True) + 1e-9)
+    probe = P + 4 * nrm
+    inside = Sd[np.clip(probe[:, 1].round().astype(int), 0, Sd.shape[0] - 1),
+                np.clip(probe[:, 0].round().astype(int), 0, Sd.shape[1] - 1)]
+    if inside.mean() < 0.5:
+        nrm = -nrm
+
+    def outside_by(q):
+        best = np.full(len(q), np.inf)
+        for c in caps:
+            a_, b_ = np.array(c["a"]), np.array(c["b"])
+            ab = b_ - a_
+            t = np.clip(((q - a_) @ ab) / max(ab @ ab, 1e-9), 0, 1)
+            dd = np.linalg.norm(q - (a_ + t[:, None] * ab), axis=1) - c["r"]
+            best = np.minimum(best, dd)
+        return best
+
+    od = outside_by(P)
+    near_floor = P[:, 1] >= P[:, 1].max() - 20  # the soles: what the banana stands on
+    gap = ((od > 3.0) & near_floor) | (od > 8.0)
+    if gap.any() and not gap.all():
+        k0 = int(np.argmin(gap))  # start the cyclic scan on a covered point
+        order = np.roll(np.arange(len(P)), -k0)
+        runs, cur = [], []
+        for i in order:
+            if gap[i]:
+                cur.append(i)
+            elif cur:
+                runs.append(cur)
+                cur = []
+        if cur:
+            runs.append(cur)
+        for run in runs:
+            for chunk in [run[j:j + 20] for j in range(0, len(run), 20)]:
+                q0 = P[chunk[0]] + nrm[chunk[0]] * rf
+                q1 = P[chunk[-1]] + nrm[chunk[-1]] * rf
+                caps.append(dict(part=0, a=(q0[0], q0[1]), b=(q1[0], q1[1]), r=float(rf), z=0.0))
     # to OBJ coordinates (metres, +Y up, front +Z)
     out = []
     for c in caps:
@@ -190,12 +236,28 @@ def capsules_for(name):
         dr.line([(ax - n[0], ay - n[1]), (bx - n[0], by - n[1])], fill=(0, 120, 255, 255), width=2)
     im.save(os.path.join(ROOT, "output", name, f"{name}_colliders_preview.png"))
     lowest = min(min(c["a"][1], c["b"][1]) - c["r"] for c in out)
+    # volume centre of the solid model (yellow body + black tips + flap), OBJ space
+    vol, mom = 0.0, np.zeros(3)
+    for piece in meta["pieces"]:
+        if not (piece.endswith("_yellow") or piece.endswith("_cap")):
+            continue
+        v = mesh[piece + "_v"].astype(np.float64)
+        w = np.stack([(v[:, 0] - cx) * PX, (y_floor - v[:, 1]) * PX, v[:, 2] * PX], 1)
+        f = mesh[piece + "_f"]
+        a_, b_, c_ = w[f[:, 0]], w[f[:, 1]], w[f[:, 2]]
+        tv = np.einsum("ij,ij->i", a_, np.cross(b_, c_)) / 6.0
+        sgn = 1.0 if tv.sum() >= 0 else -1.0
+        vol += sgn * tv.sum()
+        mom += sgn * (tv[:, None] * (a_ + b_ + c_) / 4.0).sum(0)
+    com = [round(float(x), 5) for x in mom / vol]
     json.dump(dict(units="metres, OBJ space (+Y up, character faces +Z)",
                    banana_body_mesh_height=round(body_h, 5), face_mouth_center_x=round(mouth_x, 5),
                    outline_width=round(ink * PX, 5), lowest_collider_point_y=round(lowest, 5),
+                   center_of_mass=com,
                    capsules=out), open(os.path.join(ROOT, "output", name, f"{name}_colliders.json"), "w"), indent=1)
-    print(name, len(out), "capsules, Banana_Body height", round(body_h, 4), "lowest collider y", round(lowest, 4))
-    return out, body_h, mouth_x, ink * PX
+    print(name, len(out), "capsules, Banana_Body height", round(body_h, 4), "lowest collider y", round(lowest, 4),
+          "centre of mass", com)
+    return out, body_h, mouth_x, ink * PX, com
 
 
 CS = r'''// BananaPhysics.cs - Unity 3D physics (PhysX) for the banana OBJ models.
@@ -222,7 +284,15 @@ CS = r'''// BananaPhysics.cs - Unity 3D physics (PhysX) for the banana OBJ model
 //  * Works with any import scale (measured from the Banana_Body mesh) and with Unity's
 //    X-mirroring of OBJ files (read from the Face_Mouth mesh, which is off-centre).
 //    Mesh Read/Write is NOT required. Keep the model's scale uniform (x = y = z).
+//  * The Rigidbody's centre of mass is set to the real centre of the model (overlapping
+//    capsules would otherwise pull it off). A banana has round feet, so on its own it
+//    tips over like a real one - tick 'keepUpright' to lock X/Z rotation for a character.
+//  * Editor rebuilds are undoable (Ctrl+Z) and mark the scene dirty.
 using UnityEngine;
+#if UNITY_EDITOR
+using UnityEditor;
+using UnityEditor.SceneManagement;
+#endif
 
 [DisallowMultipleComponent]
 public class BananaPhysics : MonoBehaviour
@@ -233,6 +303,8 @@ public class BananaPhysics : MonoBehaviour
     public bool addRigidbody = true;
     public float mass = 1f;
     public CollisionDetectionMode collisionDetection = CollisionDetectionMode.ContinuousSpeculative;
+    [Tooltip("Freeze rotation around X and Z so the banana stays standing (typical for a character).")]
+    public bool keepUpright = false;
 
     struct Cap
     {
@@ -254,6 +326,8 @@ __ARMS__
     const float LegsMouthCenterX = __LEGS_MX__f;     // x of the Face_Mouth mesh centre
     const float ArmsMouthCenterX = __ARMS_MX__f;
     const float OutlineWidth = __INK__f;            // ink line counted as solid (metres)
+    static readonly Vector3 LegsCenterOfMass = new Vector3(__LEGS_COM__);   // volume centre, OBJ space
+    static readonly Vector3 ArmsCenterOfMass = new Vector3(__ARMS_COM__);
 
     void Reset() { Build(); }
 
@@ -287,16 +361,14 @@ __ARMS__
         Cap[] caps = id == Banana.Arms ? Arms : Legs;
         float bodyH = id == Banana.Arms ? ArmsBodyMeshHeight : LegsBodyMeshHeight;
         float mouthX = id == Banana.Arms ? ArmsMouthCenterX : LegsMouthCenterX;
+        Vector3 com = id == Banana.Arms ? ArmsCenterOfMass : LegsCenterOfMass;
 
         // 1) generated colliders live under "Colliders" (reused on rebuild, so it also works
         //    on prefab instances); anything else - e.g. importer MeshColliders on the inverted
         //    outline shell - is removed
         Transform holder = transform.Find("Colliders");
-        if (holder == null)
-        {
-            holder = new GameObject("Colliders").transform;
-            holder.SetParent(transform, false);
-        }
+        if (holder == null) holder = NewChild(transform, "Colliders");
+        Record(holder);
         holder.localPosition = Vector3.zero; holder.localRotation = Quaternion.identity; holder.localScale = Vector3.one;
         foreach (Collider c in GetComponentsInChildren<Collider>(true))
             if (!c.transform.IsChildOf(holder)) Remove(c);
@@ -333,11 +405,13 @@ __ARMS__
             Vector3 d = b - a;
             float len = d.magnitude;
             Transform t = Child(holder, "Capsule_" + i);
+            Record(t);
             t.localPosition = (a + b) * 0.5f;
             t.localRotation = len > 1e-6f ? Quaternion.FromToRotation(Vector3.up, d / len) : Quaternion.identity;
             t.localScale = Vector3.one;
             CapsuleCollider cc = t.GetComponent<CapsuleCollider>();
-            if (cc == null) cc = t.gameObject.AddComponent<CapsuleCollider>();
+            if (cc == null) cc = AddComp<CapsuleCollider>(t.gameObject);
+            Record(cc);
             cc.enabled = true;
             cc.center = Vector3.zero;
             cc.direction = 1;
@@ -353,58 +427,109 @@ __ARMS__
             Bounds fbnd = flap.sharedMesh.bounds;
             Matrix4x4 m = transform.worldToLocalMatrix * flap.transform.localToWorldMatrix;
             if (fb == null) fb = Child(holder, "Flap_Box");
-            fb.gameObject.SetActive(true);
+            Record(fb);
             fb.localPosition = m.MultiplyPoint3x4(fbnd.center);
             fb.localRotation = m.rotation;
             fb.localScale = Vector3.one;
             BoxCollider bc = fb.GetComponent<BoxCollider>();
-            if (bc == null) bc = fb.gameObject.AddComponent<BoxCollider>();
+            if (bc == null) bc = AddComp<BoxCollider>(fb.gameObject);
+            Record(bc);
+            bc.enabled = true;
             bc.center = Vector3.zero;
             bc.size = Vector3.Scale(fbnd.size, m.lossyScale) + Vector3.one * (2f * OutlineWidth * s * k);
         }
-        else if (fb != null) fb.gameObject.SetActive(false);
+        else if (fb != null) SetActive(fb.gameObject, false);
 
         // leftovers from an older build: switch off instead of deleting (prefab-safe)
-        for (Transform t; (t = holder.Find("Capsule_" + n)) != null; n++) t.gameObject.SetActive(false);
+        for (Transform t; (t = holder.Find("Capsule_" + n)) != null; n++) SetActive(t.gameObject, false);
 
         // 4) single dynamic Rigidbody on the root
         if (addRigidbody)
         {
             Rigidbody rb = GetComponent<Rigidbody>();
-            if (rb == null) rb = gameObject.AddComponent<Rigidbody>();
+            if (rb == null) rb = AddComp<Rigidbody>(gameObject);
+            Record(rb);
             rb.mass = mass;
             rb.isKinematic = false;
+            rb.detectCollisions = true;
             rb.interpolation = RigidbodyInterpolation.Interpolate;
             rb.collisionDetectionMode = collisionDetection;
+            rb.centerOfMass = bodyToRoot.MultiplyPoint3x4(Map(com, s, mirror));
+            if (keepUpright)
+                rb.constraints |= RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
         }
+#if UNITY_EDITOR
+        if (!Application.isPlaying)
+        {
+            EditorUtility.SetDirty(this);
+            if (gameObject.scene.IsValid()) EditorSceneManager.MarkSceneDirty(gameObject.scene);
+        }
+#endif
     }
 
     static Vector3 Map(Vector3 p, float s, float mirror) => new Vector3(mirror * p.x * s, p.y * s, p.z * s);
 
+    // ---- small helpers: in the editor every change goes through Undo
+    static Transform NewChild(Transform parent, string childName)
+    {
+        GameObject go = new GameObject(childName);
+        go.transform.SetParent(parent, false);
+#if UNITY_EDITOR
+        if (!Application.isPlaying) Undo.RegisterCreatedObjectUndo(go, "Build Banana Colliders");
+#endif
+        return go.transform;
+    }
+
     static Transform Child(Transform parent, string childName)
     {
         Transform t = parent.Find(childName);
-        if (t == null)
-        {
-            t = new GameObject(childName).transform;
-            t.SetParent(parent, false);
-        }
-        t.gameObject.SetActive(true);
+        if (t == null) t = NewChild(parent, childName);
+        SetActive(t.gameObject, true);
         return t;
+    }
+
+    static T AddComp<T>(GameObject go) where T : Component
+    {
+#if UNITY_EDITOR
+        if (!Application.isPlaying) return Undo.AddComponent<T>(go);
+#endif
+        return go.AddComponent<T>();
+    }
+
+    static void Record(Object o)
+    {
+#if UNITY_EDITOR
+        if (!Application.isPlaying) Undo.RecordObject(o, "Build Banana Colliders");
+#endif
+    }
+
+    static void SetActive(GameObject go, bool on)
+    {
+        if (go.activeSelf == on) return;
+        Record(go);
+        go.SetActive(on);
     }
 
     static void Remove(Component c)
     {
+        // switch it off first: Destroy() only happens at the end of the frame, and the
+        // inside-out outline shell must not take part in even one physics step
+        if (c is Collider col0) { Record(col0); col0.enabled = false; }
+        if (c is Rigidbody rb0) { Record(rb0); rb0.isKinematic = true; rb0.detectCollisions = false; }
         try
         {
+#if UNITY_EDITOR
+            if (!Application.isPlaying) { Undo.DestroyObjectImmediate(c); return; }
+#endif
             if (Application.isPlaying) Destroy(c); else DestroyImmediate(c);
         }
         catch (System.InvalidOperationException)
         {
-            // components that belong to a prefab asset cannot be destroyed on the instance
-            if (c is Collider col) col.enabled = false;
-            else Debug.LogWarning("BananaPhysics: remove " + c.GetType().Name + " on '" + c.name +
-                                  "' in the prefab - a child Rigidbody splits the compound body.", c);
+            // components that belong to a prefab asset cannot be destroyed on the instance;
+            // a disabled collider is harmless, a child Rigidbody has to go in the prefab
+            if (c is Rigidbody)
+                Debug.LogWarning("BananaPhysics: remove the Rigidbody on '" + c.name +
+                                 "' in the prefab - a child Rigidbody splits the compound body.", c);
         }
     }
 }
@@ -418,12 +543,14 @@ def cs_rows(caps):
 
 
 if __name__ == "__main__":
-    legs, hl, mxl, inkl = capsules_for("banana_legs")
-    arms, ha, mxa, inka = capsules_for("banana_arms")
+    legs, hl, mxl, inkl, coml = capsules_for("banana_legs")
+    arms, ha, mxa, inka, coma = capsules_for("banana_arms")
     os.makedirs(os.path.join(ROOT, "unity"), exist_ok=True)
     cs = (CS.replace("__LEGS__", cs_rows(legs)).replace("__ARMS__", cs_rows(arms))
           .replace("__LEGS_H__", str(round(hl, 5))).replace("__ARMS_H__", str(round(ha, 5)))
           .replace("__LEGS_MX__", str(round(mxl, 5))).replace("__ARMS_MX__", str(round(mxa, 5)))
-          .replace("__INK__", str(round(min(inkl, inka), 5))))
+          .replace("__INK__", str(round(min(inkl, inka), 5)))
+          .replace("__LEGS_COM__", "{}f, {}f, {}f".format(*coml))
+          .replace("__ARMS_COM__", "{}f, {}f, {}f".format(*coma)))
     open(os.path.join(ROOT, "unity", "BananaPhysics.cs"), "w").write(cs)
     print("wrote unity/BananaPhysics.cs")

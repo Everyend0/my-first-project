@@ -7,13 +7,24 @@ public class CollisionDebugger : MonoBehaviour
     {
         // compound bodies (e.g. a banana with BananaPhysics) keep their colliders on
         // child objects; count those too
-        var cols = GetComponentsInChildren<Collider>();
-        var col = cols.Length > 0 ? cols[0] : null;
+        // only colliders that take part in physics (enabled), grouped by type
+        var types = new System.Collections.Generic.SortedDictionary<string, int>();
+        int triggers = 0, total = 0;
+        foreach (var c in GetComponentsInChildren<Collider>())
+        {
+            if (!c.enabled) continue;
+            string t = c.GetType().Name;
+            types[t] = types.TryGetValue(t, out int k) ? k + 1 : 1;
+            if (c.isTrigger) triggers++;
+            total++;
+        }
+        var parts = new System.Collections.Generic.List<string>();
+        foreach (var kv in types) parts.Add($"{kv.Key} x{kv.Value}");
         var rb  = GetComponent<Rigidbody>();
         Debug.Log(
             $"[Setup] {name} | layer={gameObject.layer} ({LayerMask.LayerToName(gameObject.layer)}) " +
-            $"| colliders={cols.Length} ({(col != null ? col.GetType().Name : "none")}) " +
-            $"| isTrigger={(col != null ? col.isTrigger.ToString() : "n/a")} " +
+            $"| colliders={total} ({(total > 0 ? string.Join(", ", parts) : "none")}) " +
+            $"| triggers={triggers} " +
             $"| rigidbody={(rb != null ? (rb.isKinematic ? "Kinematic" : "Dynamic") : "none")} " +
             $"| active={gameObject.activeInHierarchy}",
             this);

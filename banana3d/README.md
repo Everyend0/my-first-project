@@ -35,8 +35,8 @@ output/<이름>/
 | 오브젝트 | 재질 | 내용 |
 |---|---|---|
 | `Banana_Body` | `Banana_Yellow` | 노란 몸통 (그림의 테두리 안쪽 모양 그대로) |
-| `Banana_Tips_Black` | `Ink_Black` | 꼭지·발끝·팔끝 검은 부분 |
-| `Face_Eye_1`, `Face_Eye_2`, `Face_Mouth` | `Ink_Black` | 얼굴 (그림에서 그대로 따낸 모양, 표면에 살짝 붙어 있음) |
+| `Banana_Tips_Black` | `Ink_Black` | 꼭지·발끝·팔끝 검은 부분 (살짝 광택) |
+| `Face_Eye_1`, `Face_Eye_2`, `Face_Mouth` | `Ink_Line_Matte` | 얼굴 (그림에서 그대로 따낸 모양, 표면에 살짝 붙은 무광 잉크) |
 | `Banana_BackPeelFlap` (다리 바나나만) | `Banana_Yellow` | 다리 사이로 보이는 뒤쪽 껍질 조각. 몸 뒤에 붙어 있어서 뒤에서 보면 둥근 껍질 조각 + 테두리로 보입니다 |
 | `InkLine_ArmSeam_N` / `_Back` (팔 바나나) | `Ink_Line_Matte` | 팔과 몸 사이 선 (앞·뒤 표면에 그린 선) |
 | `InkLine_LegSplit` (다리 바나나) | `Ink_Line_Matte` | 다리 갈라지는 선의 윗부분 |
@@ -63,6 +63,7 @@ output/<이름>/
 - 정점은 소수 6자리로 쓰면서 겹치는 점을 합쳐 두어서, 각 오브젝트가 구멍 없이 닫혀 있습니다.
 - Blender의 OBJ 가져오기는 `Kd`를 선형 값으로 읽어 노랑이 살짝 연해집니다. Blender에서는 같이 들어 있는 `.blend`를 쓰거나, Base Color를 (1.0, 0.88, 0.003)으로 바꿔 주세요.
 - 법선(`vn`)은 꼭지 경계처럼 각진 곳에서 갈라 두어서, 검정·노랑 경계에 음영 번짐이 없습니다.
+- `Banana_Body`는 정점이 65,535개를 넘어서 32비트 인덱스가 필요합니다. Unity(Index Format: Auto)·three.js는 자동으로 처리합니다. 모바일용으로 가볍게 쓰려면 Blender에서 Decimate 하세요.
 
 ## Unity 물리 (충돌)
 
@@ -72,7 +73,9 @@ output/<이름>/
 - 캡슐 반지름에 검은 외곽선 두께 대부분을 포함해서, 물체가 외곽선에 닿는 순간 부딪힙니다 (선 안으로 파묻히지 않음). 바닥에 세우면 외곽선 아래쪽이 바닥에 닿습니다.
 - 다리 바나나의 뒤쪽 껍질 조각은 메쉬 크기에 맞춘 BoxCollider 하나로 처리합니다.
 - 임포트 배율과 Unity의 OBJ X축 반전은 `Banana_Body`·`Face_Mouth` 메쉬 크기로 자동 보정합니다. 메쉬 Read/Write 설정은 필요 없습니다.
-- 루트에 Rigidbody 하나를 둡니다 (Continuous Speculative).
+- 루트에 Rigidbody 하나를 둡니다 (Continuous Speculative). 무게중심은 실제 모델 부피 중심으로 맞춰 둡니다.
+- 발바닥이 둥근 바나나라 그냥 두면 실제처럼 넘어집니다. 캐릭터로 세워 두려면 `keepUpright`를 켜세요 (X/Z 회전 고정).
+- 에디터에서 다시 만들기(Build Colliders)는 Ctrl+Z로 되돌릴 수 있습니다.
 - `Outline_Ink_*` 에는 절대 콜라이더를 달지 마세요. 안팎이 뒤집힌 메쉬라 물체를 안으로 빨아들입니다. 임포트 설정의 *Generate Colliders*도 꺼 두세요. (스크립트가 다른 콜라이더를 지우고, 프리팹 안이라 못 지우면 꺼 둡니다.)
 - 충돌 콜백 `OnCollisionEnter(Collision c)` 은 루트 오브젝트(Rigidbody 있는 곳)에서 받습니다. 캡슐은 그 아래 `Colliders` 자식에 있습니다.
 - 캡슐 미리보기: `output/<이름>/<이름>_colliders_preview.png`, 수치: `<이름>_colliders.json`
